@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "../ISA_Def/accelwattch_component_mapping.h"
+#include "../ISA_Def/hopper_opcode.h"
 #include "../ISA_Def/ampere_opcode.h"
 #include "../ISA_Def/kepler_opcode.h"
 #include "../ISA_Def/pascal_opcode.h"
@@ -102,7 +103,9 @@ trace_kernel_info_t::trace_kernel_info_t(dim3 gridDim, dim3 blockDim,
   m_was_launched = false;
 
   // resolve the binary version
-  if (kernel_trace_info->binary_verion == AMPERE_RTX_BINART_VERSION ||
+  if (kernel_trace_info->binary_verion == HOPPER_H100_BINART_VERSION)
+    OpcodeMap = &Hopper_OpcodeMap;
+  else if (kernel_trace_info->binary_verion == AMPERE_RTX_BINART_VERSION ||
       kernel_trace_info->binary_verion == AMPERE_A100_BINART_VERSION)
     OpcodeMap = &Ampere_OpcodeMap;
   else if (kernel_trace_info->binary_verion == VOLTA_BINART_VERSION)
@@ -209,6 +212,9 @@ bool trace_warp_inst_t::parse_from_trace_struct(
     assert(0 && "undefined instruction");
   }
   std::string opcode = trace.opcode;
+#if defined(DEBUG) && DEBUG
+  opcode_for_debug = opcode;
+#endif
   if (opcode1 == "MUFU") {  // Differentiate between different MUFU operations
                             // for power model
     if ((opcode == "MUFU.SIN") || (opcode == "MUFU.COS")) sp_op = FP_SIN_OP;
@@ -238,6 +244,38 @@ bool trace_warp_inst_t::parse_from_trace_struct(
     in[m] = trace.reg_src[m] + 1;  // Increment by one because GPGPU-sim starts
                                    // from R1, while SASS starts from R0
     arch_reg.src[m] = trace.reg_src[m] + 1;
+  }
+
+  if (opcode1 == "HMMA" || opcode1 == "IMMA") {
+    if (opcode.find("HMMA.16816.F32") != std::string::npos || opcode.find("IMMA.16832") != std::string::npos) {
+      auto reg_srcs_num = 4 + 2 + 4;
+      auto reg_dsts_num = 4;
+      num_regs = reg_srcs_num + reg_dsts_num;
+      num_operands = num_regs;
+
+      outcount = reg_dsts_num;
+      out[0] = trace.reg_dest[0] + 1;
+      arch_reg.dst[0] = trace.reg_dest[0] + 1;
+      for (int i = 1; i < reg_dsts_num; i++) {
+        out[i] = out[i - 1] + 1;
+        arch_reg.dst[i] = arch_reg.dst[i - 1] + 1;
+      }
+
+      incount = reg_srcs_num;
+      in[0] = trace.reg_src[0] + 1; in[1] = in[0] + 1; in[2] = in[1] + 1; in[3] = in[2] + 1;
+      in[4] = trace.reg_src[1] + 1; in[5] = in[4] + 1;
+      in[6] = trace.reg_src[2] + 1; in[7] = in[6] + 1; in[8] = in[7] + 1; in[9] = in[8] + 1;
+      arch_reg.src[0] = trace.reg_src[0] + 1; arch_reg.src[1] = arch_reg.src[0] + 1;
+      arch_reg.src[2] = arch_reg.src[1] + 1; arch_reg.src[3] = arch_reg.src[2] + 1;
+      arch_reg.src[4] = trace.reg_src[1] + 1; arch_reg.src[5] = arch_reg.src[4] + 1;
+      arch_reg.src[6] = trace.reg_src[2] + 1; arch_reg.src[7] = arch_reg.src[6] + 1;
+      arch_reg.src[8] = arch_reg.src[7] + 1; arch_reg.src[9] = arch_reg.src[8] + 1;
+    }
+    else {
+      std::cout << "ERROR:  undefined MMA instruction : " << trace.opcode
+                << std::endl;
+      assert(0 && "undefined MMA instruction in trace parser");
+    }
   }
 
   // fill latency and initl
