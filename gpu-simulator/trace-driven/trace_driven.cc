@@ -39,6 +39,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <cstdlib>
+#include <cstdio>
 
 #include "../ISA_Def/accelwattch_component_mapping.h"
 #include "../ISA_Def/hopper_opcode.h"
@@ -57,6 +59,24 @@
 #include "gpgpusim_entrypoint.h"
 #include "option_parser.h"
 #include "trace_driven.h"
+
+// 读取 ACCELSIM_MMA_BLOCKS，支持 "a,b,c,d" 或 "a+b+c,d" 两种格式。
+// a,b,c 是三个源块长度；d 是目的块长度。
+// 例：默认 4,2,4,4；用户可设 ACCELSIM_MMA_BLOCKS=4,2,4,4 或 4+2+4,4
+static inline bool read_mma_blocks_from_env(
+    unsigned &a, unsigned &b, unsigned &c, unsigned &d) {
+  const char *env = std::getenv("ACCELSIM_MMA_BLOCKS");
+  if (!env) return false;
+
+  unsigned ta=0, tb=0, tc=0, td=0;
+  // 允许两种格式
+  if (std::sscanf(env, " %u , %u , %u , %u ", &ta, &tb, &tc, &td) == 4 ||
+      std::sscanf(env, " %u + %u + %u , %u ", &ta, &tb, &tc, &td) == 4) {
+    a = ta; b = tb; c = tc; d = td;
+    return true;
+  }
+  return false;
+}
 
 const trace_warp_inst_t *trace_shd_warp_t::get_next_trace_inst() {
   if (trace_pc < warp_traces.size()) {
@@ -247,36 +267,58 @@ bool trace_warp_inst_t::parse_from_trace_struct(
   }
 
   if (opcode1 == "HMMA" || opcode1 == "IMMA") {
-    if (opcode.find("HMMA.16816.F32") != std::string::npos || opcode.find("IMMA.16832") != std::string::npos) {
-      auto reg_srcs_num = 4 + 2 + 4;
-      auto reg_dsts_num = 4;
-      num_regs = reg_srcs_num + reg_dsts_num;
+    if (opcode.find("HMMA.16816.F32") != std::string::npos ||
+        opcode.find("IMMA.16832")    != std::string::npos) {
+
+      unsigned src_blk0 = 4, src_blk1 = 2, src_blk2 = 4;  // default is 4+2+4
+      unsigned dst_blk  = 4;                              // default is 4
+      (void)read_mma_blocks_from_env(src_blk0, src_blk1, src_blk2, dst_blk);
+      const unsigned reg_srcs_num = src_blk0 + src_blk1 + src_blk2;
+      const unsigned reg_dsts_num = dst_blk;
+
+      assert(reg_srcs_num <= MAX_INPUT_VALUES);
+      assert(reg_dsts_num <= MAX_OUTPUT_VALUES);
+      assert(trace.reg_srcs_num >= 3 || (src_blk0==0 && src_blk1==0 && src_blk2==0));
+      assert(trace.reg_dsts_num >= 1 || dst_blk==0);
+
+      num_regs     = reg_srcs_num + reg_dsts_num;
       num_operands = num_regs;
 
+      // ---------- 目的寄存器（连续展开） ----------
       outcount = reg_dsts_num;
-      out[0] = trace.reg_dest[0] + 1;
-      arch_reg.dst[0] = trace.reg_dest[0] + 1;
-      for (int i = 1; i < reg_dsts_num; i++) {
-        out[i] = out[i - 1] + 1;
-        arch_reg.dst[i] = arch_reg.dst[i - 1] + 1;
+      if (reg_dsts_num > 0) {
+        out[0]            = trace.reg_dest[0] + 1;   // GPGPU-Sim 从 R1 开始
+        arch_reg.dst[0]   = trace.reg_dest[0] + 1;
+        for (unsigned i = 1; i < reg_dsts_num; ++i) {
+          out[i]          = out[i - 1] + 1;
+          arch_reg.dst[i] = arch_reg.dst[i - 1] + 1;
+        }
       }
 
+      // ---------- 源寄存器（按 3 个块展开） ----------
       incount = reg_srcs_num;
-      in[0] = trace.reg_src[0] + 1; in[1] = in[0] + 1; in[2] = in[1] + 1; in[3] = in[2] + 1;
-      in[4] = trace.reg_src[1] + 1; in[5] = in[4] + 1;
-      in[6] = trace.reg_src[2] + 1; in[7] = in[6] + 1; in[8] = in[7] + 1; in[9] = in[8] + 1;
-      arch_reg.src[0] = trace.reg_src[0] + 1; arch_reg.src[1] = arch_reg.src[0] + 1;
-      arch_reg.src[2] = arch_reg.src[1] + 1; arch_reg.src[3] = arch_reg.src[2] + 1;
-      arch_reg.src[4] = trace.reg_src[1] + 1; arch_reg.src[5] = arch_reg.src[4] + 1;
-      arch_reg.src[6] = trace.reg_src[2] + 1; arch_reg.src[7] = arch_reg.src[6] + 1;
-      arch_reg.src[8] = arch_reg.src[7] + 1; arch_reg.src[9] = arch_reg.src[8] + 1;
-    }
-    else {
+      const unsigned blk_len[3] = {src_blk0, src_blk1, src_blk2};
+      unsigned pos = 0;
+      for (unsigned b = 0; b < 3; ++b) {
+        const unsigned len = blk_len[b];
+        if (len == 0) continue;                  // 允许某个块长度为 0
+        // 每个块以 trace.reg_src[b] 为起点按顺序递增
+        in[pos]          = trace.reg_src[b] + 1;
+        arch_reg.src[pos]= trace.reg_src[b] + 1;
+        for (unsigned j = 1; j < len; ++j) {
+          in[pos + j]           = in[pos + j - 1] + 1;
+          arch_reg.src[pos + j] = arch_reg.src[pos + j - 1] + 1;
+        }
+        pos += len;
+      }
+
+    } else {
       std::cout << "ERROR:  undefined MMA instruction : " << trace.opcode
                 << std::endl;
       assert(0 && "undefined MMA instruction in trace parser");
     }
   }
+
 
   // fill latency and initl
   tconfig->set_latency(op, latency, initiation_interval);
