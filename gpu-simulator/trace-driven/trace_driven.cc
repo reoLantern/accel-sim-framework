@@ -266,56 +266,60 @@ bool trace_warp_inst_t::parse_from_trace_struct(
     arch_reg.src[m] = trace.reg_src[m] + 1;
   }
 
+  unsigned src_blk0, src_blk1, src_blk2, dst_blk;
   if (opcode1 == "HMMA" || opcode1 == "IMMA") {
     if (opcode.find("HMMA.16816.F32") != std::string::npos ||
         opcode.find("IMMA.16832")    != std::string::npos) {
 
-      unsigned src_blk0 = 4, src_blk1 = 2, src_blk2 = 4;  // default is 4+2+4
-      unsigned dst_blk  = 4;                              // default is 4
-      (void)read_mma_blocks_from_env(src_blk0, src_blk1, src_blk2, dst_blk);
-      const unsigned reg_srcs_num = src_blk0 + src_blk1 + src_blk2;
-      const unsigned reg_dsts_num = dst_blk;
+      src_blk0 = 4; src_blk1 = 2; src_blk2 = 4;  // default is 4+2+4
+      dst_blk  = 4;                              // default is 4
 
-      assert(reg_srcs_num <= MAX_INPUT_VALUES);
-      assert(reg_dsts_num <= MAX_OUTPUT_VALUES);
-      assert(trace.reg_srcs_num >= 3 || (src_blk0==0 && src_blk1==0 && src_blk2==0));
-      assert(trace.reg_dsts_num >= 1 || dst_blk==0);
-
-      num_regs     = reg_srcs_num + reg_dsts_num;
-      num_operands = num_regs;
-
-      // ---------- 目的寄存器（连续展开） ----------
-      outcount = reg_dsts_num;
-      if (reg_dsts_num > 0) {
-        out[0]            = trace.reg_dest[0] + 1;   // GPGPU-Sim 从 R1 开始
-        arch_reg.dst[0]   = trace.reg_dest[0] + 1;
-        for (unsigned i = 1; i < reg_dsts_num; ++i) {
-          out[i]          = out[i - 1] + 1;
-          arch_reg.dst[i] = arch_reg.dst[i - 1] + 1;
-        }
-      }
-
-      // ---------- 源寄存器（按 3 个块展开） ----------
-      incount = reg_srcs_num;
-      const unsigned blk_len[3] = {src_blk0, src_blk1, src_blk2};
-      unsigned pos = 0;
-      for (unsigned b = 0; b < 3; ++b) {
-        const unsigned len = blk_len[b];
-        if (len == 0) continue;                  // 允许某个块长度为 0
-        // 每个块以 trace.reg_src[b] 为起点按顺序递增
-        in[pos]          = trace.reg_src[b] + 1;
-        arch_reg.src[pos]= trace.reg_src[b] + 1;
-        for (unsigned j = 1; j < len; ++j) {
-          in[pos + j]           = in[pos + j - 1] + 1;
-          arch_reg.src[pos + j] = arch_reg.src[pos + j - 1] + 1;
-        }
-        pos += len;
-      }
-
-    } else {
+    }
+    else if (opcode.find("HMMA.16816.F16") != std::string::npos) {
+      src_blk0 = 4; src_blk1 = 2; src_blk2 = 2;
+      dst_blk  = 2;
+    }
+    else {
       std::cout << "ERROR:  undefined MMA instruction : " << trace.opcode
                 << std::endl;
       assert(0 && "undefined MMA instruction in trace parser");
+    }
+    (void)read_mma_blocks_from_env(src_blk0, src_blk1, src_blk2, dst_blk);
+    const unsigned reg_srcs_num = src_blk0 + src_blk1 + src_blk2;
+    const unsigned reg_dsts_num = dst_blk;
+
+    assert(reg_srcs_num <= MAX_INPUT_VALUES);
+    assert(reg_dsts_num <= MAX_OUTPUT_VALUES);
+
+    num_regs     = reg_srcs_num + reg_dsts_num;
+    num_operands = num_regs;
+
+    // ---------- 目的寄存器（连续展开） ----------
+    outcount = reg_dsts_num;
+    if (reg_dsts_num > 0) {
+      out[0]            = trace.reg_dest[0] + 1;   // GPGPU-Sim 从 R1 开始
+      arch_reg.dst[0]   = trace.reg_dest[0] + 1;
+      for (unsigned i = 1; i < reg_dsts_num; ++i) {
+        out[i]          = out[i - 1] + 1;
+        arch_reg.dst[i] = arch_reg.dst[i - 1] + 1;
+      }
+    }
+
+    // ---------- 源寄存器（按 3 个块展开） ----------
+    incount = reg_srcs_num;
+    const unsigned blk_len[3] = {src_blk0, src_blk1, src_blk2};
+    unsigned pos = 0;
+    for (unsigned b = 0; b < 3; ++b) {
+      const unsigned len = blk_len[b];
+      if (len == 0) continue;                  // 允许某个块长度为 0
+      // 每个块以 trace.reg_src[b] 为起点按顺序递增
+      in[pos]          = trace.reg_src[b] + 1;
+      arch_reg.src[pos]= trace.reg_src[b] + 1;
+      for (unsigned j = 1; j < len; ++j) {
+        in[pos + j]           = in[pos + j - 1] + 1;
+        arch_reg.src[pos + j] = arch_reg.src[pos + j - 1] + 1;
+      }
+      pos += len;
     }
   }
 

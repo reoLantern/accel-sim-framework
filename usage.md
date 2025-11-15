@@ -30,7 +30,7 @@ cmake --build ./gpu-simulator/build/$MODE -j64
 cmake --install ./gpu-simulator/build/$MODE
 
 # 一条命令连起来：
-export MODE=release && cd /home/mmy/work/gpgpusim/accel-sim-framework && source ./gpu-simulator/setup_environment.sh $MODE && cmake -S ./gpu-simulator -B ./gpu-simulator/build/$MODE && cmake --build ./gpu-simulator/build/$MODE -j64 && cmake --install ./gpu-simulator/build/$MODE
+export MODE=release && cd $HOME/work/gpgpu-sim/accel-sim-framework && source ./gpu-simulator/setup_environment.sh $MODE && cmake -S ./gpu-simulator -B ./gpu-simulator/build/$MODE && cmake --build ./gpu-simulator/build/$MODE -j64 && cmake --install ./gpu-simulator/build/$MODE
 
 # 清理当前 MODE 的目标与中间产物
 cmake --build ./gpu-simulator/build/$MODE --target clean
