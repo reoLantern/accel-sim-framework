@@ -248,6 +248,18 @@ bool trace_warp_inst_t::parse_from_trace_struct(
     if ((opcode == "IMAD.MOV") || (opcode == "IMAD.IADD")) sp_op = INT__OP;
   }
 
+  if (m_opcode == OP_LDSM) {
+    m_is_ldsm = true;
+    if (opcode.find("LDSM.16.M88.1")  != std::string::npos ||
+        opcode.find("LDSM.16.MT88.1") != std::string::npos)
+      m_ldsm_num = 1;
+    else if (opcode.find("LDSM.16.M88.2")  != std::string::npos ||
+             opcode.find("LDSM.16.MT88.2") != std::string::npos)
+      m_ldsm_num = 2;
+    else
+      m_ldsm_num = 4;
+  }
+
   // fill regs information
   num_regs = trace.reg_srcs_num + trace.reg_dsts_num;
   num_operands = num_regs;
