@@ -58,6 +58,7 @@ struct inst_trace_t {
   unsigned reg_srcs_num;
   unsigned reg_src[MAX_SRC];
   uint64_t imm;
+  std::string trace_string;
 
   inst_memadd_info_t *memadd_info;
 

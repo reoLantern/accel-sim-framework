@@ -188,6 +188,7 @@ bool trace_warp_inst_t::parse_from_trace_struct(
 
   // fill and initialize common params
   m_decoded = true;
+  set_trace_string(trace.trace_string);
   pc = (address_type)trace.m_pc;
 
   isize =

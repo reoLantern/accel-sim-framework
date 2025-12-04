@@ -35,6 +35,7 @@ void split(const std::string &str, std::vector<std::string> &cont,
 inst_trace_t::inst_trace_t() {
   memadd_info = NULL;
   imm = 0;
+  trace_string.clear();
 }
 
 inst_trace_t::~inst_trace_t() {
@@ -42,10 +43,20 @@ inst_trace_t::~inst_trace_t() {
 }
 
 inst_trace_t::inst_trace_t(const inst_trace_t &b) {
-  if (memadd_info != NULL) {
-    memadd_info = new inst_memadd_info_t();
-    memadd_info = b.memadd_info;
-  }
+  line_num = b.line_num;
+  m_pc = b.m_pc;
+  mask = b.mask;
+  reg_dsts_num = b.reg_dsts_num;
+  for (unsigned i = 0; i < MAX_DST; ++i) reg_dest[i] = b.reg_dest[i];
+  opcode = b.opcode;
+  reg_srcs_num = b.reg_srcs_num;
+  for (unsigned i = 0; i < MAX_SRC; ++i) reg_src[i] = b.reg_src[i];
+  imm = b.imm;
+  trace_string = b.trace_string;
+  if (b.memadd_info != NULL)
+    memadd_info = new inst_memadd_info_t(*b.memadd_info);
+  else
+    memadd_info = NULL;
 }
 
 bool inst_trace_t::check_opcode_contain(const std::vector<std::string> &opcode,
@@ -136,6 +147,7 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
                                      unsigned enable_lineinfo) {
   std::stringstream ss;
   ss.str(trace);
+  trace_string = trace;
 
   std::string temp;
 
