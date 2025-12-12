@@ -262,22 +262,29 @@ bool trace_warp_inst_t::parse_from_trace_struct(
   }
 
   // fill regs information
-  num_regs = trace.reg_srcs_num + trace.reg_dsts_num;
-  num_operands = num_regs;
-  outcount = trace.reg_dsts_num;
+  unsigned real_reg_dsts_num = 0;
+  unsigned real_reg_srcs_num = 0;
   for (unsigned m = 0; m < trace.reg_dsts_num; ++m) {
-    out[m] =
+    if (trace.reg_dest[m] == 255) continue;   // R255 is actually RZ
+    out[real_reg_dsts_num] =
         trace.reg_dest[m] + 1;  // Increment by one because GPGPU-sim starts
                                 // from R1, while SASS starts from R0
-    arch_reg.dst[m] = trace.reg_dest[m] + 1;
+    arch_reg.dst[real_reg_dsts_num] = trace.reg_dest[m] + 1;
+    real_reg_dsts_num++;
   }
+  outcount = real_reg_dsts_num;
 
-  incount = trace.reg_srcs_num;
   for (unsigned m = 0; m < trace.reg_srcs_num; ++m) {
-    in[m] = trace.reg_src[m] + 1;  // Increment by one because GPGPU-sim starts
+    if (trace.reg_src[m] == 255) continue;   // R255 is actually RZ
+    in[real_reg_srcs_num] = trace.reg_src[m] + 1;  // Increment by one because GPGPU-sim starts
                                    // from R1, while SASS starts from R0
-    arch_reg.src[m] = trace.reg_src[m] + 1;
+    arch_reg.src[real_reg_srcs_num] = trace.reg_src[m] + 1;
+    real_reg_srcs_num++;
   }
+  incount = real_reg_srcs_num;
+  num_regs = real_reg_dsts_num + real_reg_srcs_num;
+  num_operands = num_regs;
+  // for below MMA inst, usually no RZ, so we don't check R255
 
   unsigned src_blk0, src_blk1, src_blk2, dst_blk;
   if (opcode1 == "HMMA" || opcode1 == "IMMA") {
