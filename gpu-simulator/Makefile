@@ -64,7 +64,7 @@ checkenv: makedirs
 	fi
 
 $(BIN_DIR)/accel-sim.out: trace-driven trace-parser gpgpu-sim makedirs version
-	$(CXX) $(CXXFLAGS) $(LIBS) -o $(BIN_DIR)/accel-sim.out accel-sim.cc main.cc 
+	$(CXX) $(CXXFLAGS) -fopenmp $(LIBS) -o $(BIN_DIR)/accel-sim.out accel-sim.cc main.cc
 
 version:
 	echo "const char *g_accelsim_version=\"$(ACCELSIM_BUILD)\";" > $(BUILD_DIR)/accelsim_version.h

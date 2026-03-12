@@ -42,3 +42,19 @@ MODE=debug \
 && rm -f ./gpu-simulator/bin/$MODE/accel-sim.out
 
 ```
+
+OpenMP Parallel Simulation:
+
+```bash
+# Accel-Sim now supports OpenMP parallelization for faster simulation
+
+# Serial baseline (1 thread)
+OMP_NUM_THREADS=1 ./gpu-simulator/build/release/accel-sim.out -trace <trace> -config <config>
+
+# Parallel simulation (8 threads, ~1.5x speedup)
+OMP_NUM_THREADS=8 OMP_PROC_BIND=spread ./gpu-simulator/build/release/accel-sim.out -trace <trace> -config <config>
+
+# Performance comparison on 01_test_comp_intensive_small:
+# - 1 thread:  5:01 wall time, 100% CPU
+# - 8 threads: 3:25 wall time, 733% CPU (1.47x speedup)
+```
