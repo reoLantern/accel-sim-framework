@@ -75,7 +75,42 @@
 
 **安全性**：`inc_running()` 仅在串行的 `issue_block2core()` 中调用，并行区间内只有 `dec_running()`。`fetch_sub` 保证只有一个线程看到 `prev==1`。
 
-### 6. Power stats 采样守卫（1 个文件）
+### 7. Per-SM 统计隔离（4 个文件） — 2026-03-15 优化
+
+参考 modern-gpu-simulator-micro-2025 的设计，将并行区内频繁写入的共享统计变量改为 per-SM/per-cluster 局部累加，在并行区结束后串行汇总到全局。消除了 cache-line bouncing 和数据竞争。
+
+**问题**：`gpu_sim_insn` 使用全局 `std::atomic<unsigned long long>`，每条指令完成时调用 `fetch_add`——对 DRAM 密集型 workload（1.3M cycles × 232 IPC），导致 4 线程同时争抢一条 cache line。此外，`update_icnt_stats()` 中的 12 个全局内存分类计数器（`gpgpu_n_mem_read_global` 等）在并行区内被多线程同时写入，存在数据竞争且加剧 cache 竞争。
+
+**解决方案**：
+
+- **gpu-simulator/gpgpu-sim/src/gpgpu-sim/shader.h**：
+  - 新增 `per_sm_local_stats` 结构体，包含 `gpu_sim_insn` 和 12 个内存分类计数器
+  - `shader_core_ctx` 添加成员 `m_local_stats`（core 级别累加器）
+  - `simt_core_cluster` 添加成员 `m_local_icnt_stats`（cluster 级别累加器）和方法 `flush_local_stats()`
+
+- **gpu-simulator/gpgpu-sim/src/gpgpu-sim/shader.cc**：
+  - `warp_inst_complete()`：`m_gpu->gpu_sim_insn.fetch_add()` → `m_local_stats.gpu_sim_insn +=`
+  - `writeback()`：移除 `gpu_sim_insn_last_update_sid/cycle` 的并行写（改在汇总阶段更新）
+  - `update_icnt_stats()`：所有 `m_stats->gpgpu_n_mem_*` → `m_local_icnt_stats.gpgpu_n_mem_*`
+  - 新增 `flush_local_stats()`：遍历 cluster 内所有 core，将局部计数器汇总到全局
+
+- **gpu-simulator/gpgpu-sim/src/gpgpu-sim/gpu-sim.h**：
+  - `gpu_sim_insn` 从 `std::atomic<unsigned long long>` 改回 `unsigned long long`（仅在串行阶段写入）
+
+- **gpu-simulator/gpgpu-sim/src/gpgpu-sim/gpu-sim.cc**：
+  - 并行 core loop 后添加串行汇总循环：`m_cluster[i]->flush_local_stats()`
+  - 清理所有 `gpu_sim_insn.load()` 为直接访问
+
+- **gpu-simulator/gpgpu-sim/src/gpgpu-sim/visualizer.cc**：
+  - 清理 `gpu_sim_insn.load()` 为直接访问
+
+**效果**：
+- 消除了并行区内唯一的高频全局 atomic（`gpu_sim_insn`）
+- 消除了 12 个内存分类计数器的数据竞争（1T/8T 统计值现在完全一致）
+- 单线程性能提升 ~17%（312s → 259s），因为去掉了 `fetch_add` 开销
+- `gpu_sim_insn_last_update_sid/cycle` 不再在并行区内被多线程竞争写入
+
+### 8. Power stats 采样守卫（1 个文件）
 
 在 DRAM 并行循环和 core_cycle 并行循环中，为 power stats 收集添加采样频率守卫，避免每个 cycle 都做无用的统计拷贝：
 
@@ -137,8 +172,9 @@ OMP_NUM_THREADS=8 OMP_PROC_BIND=close ./gpu-simulator/build/release/accel-sim.ou
 | 指标 | 1 线程 | 8 线程 | 加速比 |
 |------|--------|--------|--------|
 | **gpu_sim_cycle** | 210,145 | 210,145 | 一致 ✅ |
-| **墙钟时间** | 312s | 72s | **4.33x** |
-| **仿真速率** | 673 cycle/sec | 2,918 cycle/sec | 4.33x |
+| **gpu_sim_insn** | 1,075,052,544 | 1,075,052,544 | 一致 ✅ |
+| **墙钟时间** | 259s | 71s | **3.65x** |
+| **仿真速率** | 811 cycle/sec | 2,959 cycle/sec | 3.65x |
 
 ### Power simulation 开启（`-power_simulation_enabled 1`）
 
@@ -154,21 +190,17 @@ OMP_NUM_THREADS=8 OMP_PROC_BIND=close ./gpu-simulator/build/release/accel-sim.ou
 > 而是因为 power 计算大幅拖慢了单线程（312s → 872s），而 8 线程受影响较小（72s → 143s）。
 > 这说明 power stats 采样守卫有效减少了并行区内的串行开销。
 
-### 优化前（v1，使用 `omp critical`）
+### 历史版本对比
 
-| 指标 | 1 线程 | 8 线程 | 加速比 |
-|------|--------|--------|--------|
-| **墙钟时间** | 301.92s | 205.27s | **1.47x** |
-| **仿真速率** | 698 cycle/sec | 1,030 cycle/sec | 1.48x |
+| 版本 | 1 线程 | 8 线程 | 加速比 | 说明 |
+|------|--------|--------|--------|------|
+| v1（`omp critical`） | 302s | 205s | **1.47x** | 全局锁竞争严重 |
+| v2（atomic） | 312s | 72s | **4.33x** | 无锁 CTA 完成 + power stats 守卫 |
+| v3（per-SM stats） | 259s | 71s | **3.65x** | 消除 `gpu_sim_insn` atomic + 统计隔离 |
 
-### 为什么优化后快了这么多？
-
-初版使用 `#pragma omp critical` 全局锁保护 CTA 完成逻辑。对于 CTA 频繁完成的 workload（如 `dram_write` 有 131,074 个轻量 CTA），所有线程争抢同一把锁，导致严重 spinlock 竞争（8 线程各仅 20% CPU 利用率）。
-
-改用 `std::atomic` 后：
-- **无锁**：`fetch_sub` 返回旧值，只有使 count 从 1→0 的线程执行 `set_kernel_done`
-- **无竞争**：每个 atomic 操作独立完成，不阻塞其他线程
-- Power stats 采样守卫减少了并行区内的无用统计操作
+> **注**：v3 的加速比看似低于 v2（3.65x vs 4.33x），但这是因为**单线程更快了**（259s vs 312s，提升 17%）。
+> 8 线程墙钟时间几乎相同（71s vs 72s），说明多线程开销已经很低。
+> 绝对性能：v3 的 8 线程 (71s) 仍然是最快的。
 
 ## 环境变量
 
@@ -215,8 +247,10 @@ OMP_NUM_THREADS=8 OMP_PROC_BIND=close ./gpu-simulator/build/release/accel-sim.ou
 
 串行和并行运行必须产生完全相同的仿真结果。已验证：
 - ✅ 仿真周期数一致（210,145 cycles）
+- ✅ 指令数一致（1,075,052,544）
+- ✅ 内存分类统计一致（`gpgpu_n_mem_write_global = 16384`，per-SM 隔离后消除了数据竞争）
 - ✅ Power 报告完全一致（diff 为空）
-- ✅ 无数据竞争（atomic 替代 critical）
+- ✅ 无数据竞争（CTA 完成用 atomic，统计用 per-SM 隔离）
 - ✅ 计算密集型和 DRAM 密集型 workload 均通过
 
 ## 变更历史
@@ -226,3 +260,4 @@ OMP_NUM_THREADS=8 OMP_PROC_BIND=close ./gpu-simulator/build/release/accel-sim.ou
 | 2026-03-12 | 初版：OpenMP 并行化 DRAM + shader cluster，`omp critical` 保护 CTA 完成 | 1.47x |
 | 2026-03-13 | 优化：atomic 替换 critical，power stats 采样守卫 | 4.33x ~ 6.10x |
 | 2026-03-14 | 发现 NUMA 亲和性影响：`close` 比 `spread` 快 3 倍；更新文档和推荐配置 | 4.33x ~ 6.10x |
+| 2026-03-15 | per-SM 统计隔离：`gpu_sim_insn` 改局部累加，icnt stats 改 per-cluster 累加；消除数据竞争；单线程提速 17% | 3.65x（1T 259s→8T 71s） |
