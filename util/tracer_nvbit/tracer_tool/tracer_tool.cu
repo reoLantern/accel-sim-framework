@@ -98,6 +98,121 @@ std::unordered_map<CUcontext, std::string> ctx_current_kernel_name;
 
 std::string kernel_ranges = "";
 
+/* ================================================================
+ * TMA Descriptor Capture
+ * Intercepts cuTensorMapEncodeTiled to record descriptor parameters.
+ * This enables the simulator to model TMA transfer sizes.
+ * ================================================================ */
+struct TMADescriptorInfo {
+  CUtensorMap *host_ptr;          // host address of CUtensorMap
+  CUtensorMapDataType data_type;
+  uint32_t rank;
+  void *global_address;           // device global memory base
+  uint64_t global_dim[5];         // up to 5D
+  uint64_t global_strides[4];     // rank-1 strides
+  uint32_t box_dim[5];            // tile dimensions
+  uint32_t elem_stride[5];
+  uint32_t transfer_bytes;        // computed: product(box_dim) * sizeof(element)
+  uint8_t raw_bytes[128];         // raw CUtensorMap content for fingerprinting
+};
+
+static std::vector<TMADescriptorInfo> g_tma_descriptors;
+
+static uint32_t tma_data_type_size(CUtensorMapDataType dt) {
+  switch (dt) {
+    case CU_TENSOR_MAP_DATA_TYPE_UINT8:    return 1;
+    case CU_TENSOR_MAP_DATA_TYPE_UINT16:   return 2;
+    case CU_TENSOR_MAP_DATA_TYPE_UINT32:   return 4;
+    case CU_TENSOR_MAP_DATA_TYPE_INT32:    return 4;
+    case CU_TENSOR_MAP_DATA_TYPE_UINT64:   return 8;
+    case CU_TENSOR_MAP_DATA_TYPE_INT64:    return 8;
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT16:  return 2;
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT32:  return 4;
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT64:  return 8;
+    case CU_TENSOR_MAP_DATA_TYPE_BFLOAT16: return 2;
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ:   return 4;
+    case CU_TENSOR_MAP_DATA_TYPE_TFLOAT32: return 4;
+    case CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ:  return 4;
+    default: return 4;
+  }
+}
+
+static const char *tma_data_type_name(CUtensorMapDataType dt) {
+  switch (dt) {
+    case CU_TENSOR_MAP_DATA_TYPE_UINT8:    return "UINT8";
+    case CU_TENSOR_MAP_DATA_TYPE_UINT16:   return "UINT16";
+    case CU_TENSOR_MAP_DATA_TYPE_UINT32:   return "UINT32";
+    case CU_TENSOR_MAP_DATA_TYPE_INT32:    return "INT32";
+    case CU_TENSOR_MAP_DATA_TYPE_UINT64:   return "UINT64";
+    case CU_TENSOR_MAP_DATA_TYPE_INT64:    return "INT64";
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT16:  return "FLOAT16";
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT32:  return "FLOAT32";
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT64:  return "FLOAT64";
+    case CU_TENSOR_MAP_DATA_TYPE_BFLOAT16: return "BFLOAT16";
+    case CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ:   return "FLOAT32_FTZ";
+    case CU_TENSOR_MAP_DATA_TYPE_TFLOAT32: return "TFLOAT32";
+    case CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ:  return "TFLOAT32_FTZ";
+    default: return "UNKNOWN";
+  }
+}
+
+// Per-kernel mapping: which global tma_desc index maps to which kernel param
+struct KernelTMAMapping {
+  int desc_idx;   // index into g_tma_descriptors
+  int param_idx;  // absolute kernel parameter index
+};
+
+// Match TMA descriptors to kernel parameters by raw_bytes fingerprint.
+// Returns a vector sorted by param_idx (ascending = ascending device address).
+static std::vector<KernelTMAMapping> match_tma_descriptors_to_params(
+    CUfunction func, void **kernelParams) {
+  std::vector<KernelTMAMapping> mapping;
+  if (g_tma_descriptors.empty() || !kernelParams) return mapping;
+
+  for (int pi = 0; ; pi++) {
+    size_t paramOffset, paramSize;
+    CUresult res = cuFuncGetParamInfo(func, pi, &paramOffset, &paramSize);
+    if (res != CUDA_SUCCESS) break;  // no more params
+
+    if (paramSize != 128) continue;  // CUtensorMap is exactly 128 bytes
+
+    // Compare this param's content against all known TMA descriptors
+    for (size_t di = 0; di < g_tma_descriptors.size(); di++) {
+      if (memcmp(kernelParams[pi], g_tma_descriptors[di].raw_bytes, 128) == 0) {
+        mapping.push_back({(int)di, pi});
+        break;
+      }
+    }
+  }
+  // Already in param_idx order since we iterate pi ascending
+  return mapping;
+}
+
+static void write_tma_descriptors_to_trace(
+    FILE *f, const std::vector<KernelTMAMapping> &mapping) {
+  if (mapping.empty()) return;
+  fprintf(f, "-tma_desc_count = %zu\n", mapping.size());
+  for (size_t i = 0; i < mapping.size(); i++) {
+    const auto &d = g_tma_descriptors[mapping[i].desc_idx];
+    fprintf(f, "-tma_desc %zu param_idx=%d type=%s rank=%u "
+               "global_addr=0x%lx transfer_bytes=%u box_dim=",
+            i, mapping[i].param_idx, tma_data_type_name(d.data_type),
+            d.rank, (uint64_t)d.global_address, d.transfer_bytes);
+    for (uint32_t r = 0; r < d.rank; r++) {
+      fprintf(f, "%u%s", d.box_dim[r], r + 1 < d.rank ? "," : "");
+    }
+    fprintf(f, " global_dim=");
+    for (uint32_t r = 0; r < d.rank; r++) {
+      fprintf(f, "%lu%s", d.global_dim[r], r + 1 < d.rank ? "," : "");
+    }
+    fprintf(f, " raw=");
+    for (int b = 0; b < 128; b++) {
+      fprintf(f, "%02x", d.raw_bytes[b]);
+    }
+    fprintf(f, "\n");
+  }
+}
+
 struct KernelRange {
   uint64_t start;
   uint64_t end; // UINT64_MAX means open-ended
@@ -491,6 +606,7 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
   unsigned int blockDimX, blockDimY, blockDimZ;
   unsigned int sharedMemBytes;
   CUstream hStream;
+  void **kernelParams = nullptr;
   if (cbid == API_CUDA_cuLaunchKernelEx_ptsz ||
       cbid == API_CUDA_cuLaunchKernelEx) {
     cuLaunchKernelEx_params *p = (cuLaunchKernelEx_params *)params;
@@ -502,6 +618,7 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
     blockDimZ = p->config->blockDimZ;
     sharedMemBytes = p->config->sharedMemBytes;
     hStream = p->config->hStream;
+    kernelParams = p->kernelParams;
   } else {
     cuLaunchKernel_params *p = (cuLaunchKernel_params *)params;
     gridDimX = p->gridDimX;
@@ -512,6 +629,7 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
     blockDimZ = p->blockDimZ;
     sharedMemBytes = p->sharedMemBytes;
     hStream = p->hStream;
+    kernelParams = p->kernelParams;
   }
 
   // Get the number of registers and shared memory size for the kernel
@@ -572,6 +690,11 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
     fprintf(ctx_resultsFile[ctx], "-accelsim tracer version = %s\n",
             TRACER_VERSION);
     fprintf(ctx_resultsFile[ctx], "-enable lineinfo = %d\n", lineinfo);
+
+    // Match TMA descriptors to kernel params and write to trace header
+    auto tma_mapping = match_tma_descriptors_to_params(func, kernelParams);
+    write_tma_descriptors_to_trace(ctx_resultsFile[ctx], tma_mapping);
+
     fprintf(ctx_resultsFile[ctx], "\n");
 
     fprintf(ctx_resultsFile[ctx],
@@ -825,6 +948,44 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
       fprintf(kernelsFile, buffer);
       fprintf(kernelsFile, "\n");
       fclose(kernelsFile);
+    }
+  } break;
+  // Intercept cuTensorMapEncodeTiled to capture TMA descriptor parameters
+  case (nvbit_api_cuda_t)697: {  // API_CUDA_cuTensorMapEncodeTiled
+    if (is_exit && *pStatus == CUDA_SUCCESS) {
+      cuTensorMapEncodeTiled_params *p =
+          (cuTensorMapEncodeTiled_params *)params;
+      TMADescriptorInfo info = {};
+      info.host_ptr = p->tensorMap;
+      info.data_type = p->tensorDataType;
+      info.rank = p->tensorRank;
+      info.global_address = p->globalAddress;
+
+      uint32_t elem_size = tma_data_type_size(p->tensorDataType);
+      uint32_t transfer = elem_size;
+      for (uint32_t r = 0; r < p->tensorRank && r < 5; r++) {
+        info.global_dim[r] = p->globalDim[r];
+        info.box_dim[r] = p->boxDim[r];
+        info.elem_stride[r] = p->elementStrides[r];
+        transfer *= p->boxDim[r];
+        if (r > 0 && r < p->tensorRank)
+          info.global_strides[r - 1] = p->globalStrides[r - 1];
+      }
+      info.transfer_bytes = transfer;
+      // Copy the raw 128-byte CUtensorMap for fingerprinting.
+      // This allows the simulator to match a device-side descriptor address
+      // to the correct captured descriptor by comparing raw content.
+      memcpy(info.raw_bytes, p->tensorMap, 128);
+      g_tma_descriptors.push_back(info);
+
+      printf("[TMA] Captured descriptor #%zu: type=%s rank=%u "
+             "global_addr=%p transfer_bytes=%u box_dim=",
+             g_tma_descriptors.size() - 1,
+             tma_data_type_name(p->tensorDataType),
+             p->tensorRank, p->globalAddress, transfer);
+      for (uint32_t r = 0; r < p->tensorRank; r++)
+        printf("%u%s", p->boxDim[r], r + 1 < p->tensorRank ? "x" : "");
+      printf("\n");
     }
   } break;
   // For cuProfiler, we need to set the active region accordingly
