@@ -13,7 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if($ENV{ACCELSIM_CONFIG} STREQUAL "debug")
+if(DEFINED ENV{ACCELSIM_CONFIG} AND "$ENV{ACCELSIM_CONFIG}" STREQUAL "debug")
     set(CMAKE_BUILD_TYPE Debug)
 else()
     set(CMAKE_BUILD_TYPE Release)
@@ -78,7 +78,10 @@ include_directories(trace-parser)
 
 
 add_executable(accel-sim.out accel-sim.cc main.cc)
+# Enable OpenMP for accel-sim.out
+find_package(OpenMP REQUIRED)
 target_link_libraries(accel-sim.out PUBLIC cuda ptxsim gpgpusim intersim accelwattch entrypoint)
+target_link_libraries(accel-sim.out PUBLIC OpenMP::OpenMP_CXX)
 target_link_libraries(accel-sim.out PUBLIC -lm -lz -lGL -pthread)
 target_link_libraries(accel-sim.out PUBLIC trace-driven trace-parser)
 
