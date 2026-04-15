@@ -84,6 +84,40 @@ int xz_compress_trace = 0;
 std::map<std::string, int> opcode_to_id_map;
 std::map<int, std::string> id_to_opcode_map;
 
+/* Per-CUfunction control bits map: PC offset (bytes) -> packed 24-bit
+ * control bits extracted from getSassBinary(). Populated at instrumentation
+ * time, dumped into the trace header at kernel launch.
+ *
+ * Bit layout (128-bit instruction, Volta+ through Blackwell):
+ *   bits [105:108] stall   (4 bits)
+ *   bit  [109]     yield   (1 bit, hw value: 1 = no-yield, 0 = yield)
+ *   bits [110:112] r-bar   (3 bits, 7 = no read barrier)
+ *   bits [113:115] w-bar   (3 bits, 7 = no write barrier)
+ *   bits [116:121] b-mask  (6 bits, wait-barrier bitmask)
+ *   bits [122:125] reuse   (4 bits, RFC reuse flags)
+ * Stored as one uint32_t per PC, with bits[105:127] right-shifted to bit 0.
+ */
+std::unordered_map<CUfunction, std::unordered_map<uint32_t, uint32_t>>
+    func_control_bits;
+
+static void cb_collect_byte(uint8_t b, void* ud) {
+  ((std::vector<uint8_t>*)ud)->push_back(b);
+}
+
+/* Extract control bits from one instruction's binary encoding.
+ * Returns a 23-bit packed value: bit 0 = stall_count[0], etc., per the
+ * comment on func_control_bits above. Returns 0 if the instruction is not
+ * a 128-bit format (e.g. older arch). */
+static uint32_t extract_control_bits(Instr* instr) {
+  std::vector<uint8_t> enc;
+  enc.reserve(16);
+  instr->getSassBinary(cb_collect_byte, &enc);
+  if (enc.size() != 16) return 0;
+  uint32_t word = (uint32_t)enc[13] | ((uint32_t)enc[14] << 8) |
+                  ((uint32_t)enc[15] << 16);
+  return word >> 1;  // align bit 105 to LSB
+}
+
 std::string user_folder = getcwd(NULL, 0);
 std::string cwd = getcwd(NULL, 0);
 std::string traces_location = cwd + "/traces/";
@@ -354,6 +388,9 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 
       int opcode_id = opcode_to_id_map[instr->getOpcode()];
 
+      /* Extract and cache control bits for this PC (Volta+ only). */
+      func_control_bits[f][instr->getOffset()] = extract_control_bits(instr);
+
       /* check all operands. For now, we ignore constant, TEX, predicates and
        * unified registers. We only report vector regisers */
       int src_oprd[MAX_SRC];
@@ -571,6 +608,32 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
     fprintf(ctx_resultsFile[ctx], "-accelsim tracer version = %s\n",
             TRACER_VERSION);
     fprintf(ctx_resultsFile[ctx], "-enable lineinfo = %d\n", lineinfo);
+
+    /* Dump per-PC control bits for this kernel.
+     * Format:
+     *   -control_bits_count = N
+     *   -cb 0xPC 0xCTRL
+     *   ...
+     * where CTRL is bits[105:127] of the 128-bit instruction encoding,
+     * right-shifted so stall is in bits[0:3]. See decode notes near the
+     * func_control_bits declaration. */
+    {
+      auto it = func_control_bits.find(func);
+      if (it != func_control_bits.end()) {
+        const auto& m = it->second;
+        // Sort by PC for deterministic output and easy diff.
+        std::vector<std::pair<uint32_t, uint32_t>> entries(m.begin(), m.end());
+        std::sort(entries.begin(), entries.end());
+        fprintf(ctx_resultsFile[ctx], "-control_bits_count = %zu\n",
+                entries.size());
+        for (const auto& e : entries) {
+          fprintf(ctx_resultsFile[ctx], "-cb 0x%04x 0x%06x\n", e.first,
+                  e.second);
+        }
+      } else {
+        fprintf(ctx_resultsFile[ctx], "-control_bits_count = 0\n");
+      }
+    }
     fprintf(ctx_resultsFile[ctx], "\n");
 
     fprintf(ctx_resultsFile[ctx],
