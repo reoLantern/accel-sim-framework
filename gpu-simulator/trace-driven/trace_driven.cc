@@ -403,6 +403,14 @@ bool trace_warp_inst_t::parse_from_trace_struct(
       break;
   }
 
+  // Attach per-PC control bits from trace header (if available).
+  if (kernel_trace_info) {
+    auto it = kernel_trace_info->control_bits.find(trace.m_pc);
+    if (it != kernel_trace_info->control_bits.end()) {
+      m_ctrl_bits = it->second;
+    }
+  }
+
   return true;
 }
 

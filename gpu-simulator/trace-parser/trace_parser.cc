@@ -346,6 +346,14 @@ kernel_trace_t *trace_parser::parse_kernel_info(
         const size_t equal_idx = line.find('=');
         ss.str(line.substr(equal_idx + 1));
         ss >> std::hex >> kernel_info->local_base_addr;
+      } else if (string1 == "control_bits_count") {
+        // Just informational — actual data comes from `-cb` lines below.
+        // We don't need to pre-allocate since unordered_map grows on insert.
+      } else if (string1 == "cb") {
+        // Format: -cb 0xPC 0xCTRL
+        unsigned pc = 0, ctrl = 0;
+        sscanf(line.c_str(), "-cb 0x%x 0x%x", &pc, &ctrl);
+        kernel_info->control_bits[pc] = ctrl_bits_t(ctrl);
       }
       std::cout << line << std::endl;
       continue;

@@ -109,6 +109,8 @@ class PipeReader {
   void OpenFile(const std::string &filePath);
 };
 
+#include "../gpgpu-sim/src/ctrl_bits.h"
+
 struct kernel_trace_t {
   kernel_trace_t(const std::string &filePath);
 
@@ -130,6 +132,10 @@ struct kernel_trace_t {
   unsigned long long shmem_base_addr;
   unsigned long long local_base_addr;
   PipeReader pipeReader;
+
+  // Per-PC control bits (populated from trace header `-cb` lines).
+  // Empty if trace was generated without NVBit v1.8+ getSassBinary().
+  std::unordered_map<unsigned, ctrl_bits_t> control_bits;
 };
 
 class trace_parser {
