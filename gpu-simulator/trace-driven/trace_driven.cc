@@ -133,6 +133,7 @@ types_of_operands get_oprnd_type(op_type op, special_ops sp_op) {
   switch (op) {
     case SP_OP:
     case SFU_OP:
+    case HALF_OP:
     case SPECIALIZED_UNIT_2_OP:
     case SPECIALIZED_UNIT_3_OP:
     case DP_OP:
@@ -141,6 +142,11 @@ types_of_operands get_oprnd_type(op_type op, special_ops sp_op) {
       return FP_OP;
     case INTP_OP:
     case SPECIALIZED_UNIT_4_OP:
+    case UNIFORM_OP:
+    case PREDICATE_OP:
+    case MISCELLANEOUS_QUEUE_OP:
+    case MISCELLANEOUS_NO_QUEUE_OP:
+    case BRANCH_OP:
       return INT_OP;
     case ALU_OP:
       if ((sp_op == FP__OP) || (sp_op == TEX__OP) || (sp_op == OTHER_OP))
@@ -457,6 +463,28 @@ void trace_config::reg_options(option_parser_t opp) {
                            " <latency,initiation>",
                            "4,4");
   }
+
+  // Phase 3 Step A: fine-grained instruction type latencies.
+  option_parser_register(opp, "-trace_opcode_latency_initiation_branch",
+                         OPT_CSTR, &trace_opcode_latency_initiation_branch,
+                         "branch instruction <latency,initiation>", "2,1");
+  option_parser_register(opp, "-trace_opcode_latency_initiation_half",
+                         OPT_CSTR, &trace_opcode_latency_initiation_half,
+                         "FP16 half instruction <latency,initiation>", "3,2");
+  option_parser_register(opp, "-trace_opcode_latency_initiation_uniform",
+                         OPT_CSTR, &trace_opcode_latency_initiation_uniform,
+                         "uniform datapath <latency,initiation>", "2,2");
+  option_parser_register(opp, "-trace_opcode_latency_initiation_predicate",
+                         OPT_CSTR, &trace_opcode_latency_initiation_predicate,
+                         "predicate instruction <latency,initiation>", "13,2");
+  option_parser_register(
+      opp, "-trace_opcode_latency_initiation_miscellaneous_queue", OPT_CSTR,
+      &trace_opcode_latency_initiation_miscellaneous_queue,
+      "misc queue instruction <latency,initiation>", "2,2");
+  option_parser_register(
+      opp, "-trace_opcode_latency_initiation_miscellaneous_no_queue", OPT_CSTR,
+      &trace_opcode_latency_initiation_miscellaneous_no_queue,
+      "misc no-queue instruction <latency,initiation>", "1,1");
 }
 
 void trace_config::parse_config() {
@@ -471,6 +499,19 @@ void trace_config::parse_config() {
     sscanf(trace_opcode_latency_initiation_specialized_op[j], "%u,%u",
            &specialized_unit_latency[j], &specialized_unit_initiation[j]);
   }
+  // Phase 3 Step A: parse fine-grained instruction type latencies.
+  sscanf(trace_opcode_latency_initiation_branch, "%u,%u",
+         &branch_latency, &branch_init);
+  sscanf(trace_opcode_latency_initiation_half, "%u,%u",
+         &half_latency, &half_init);
+  sscanf(trace_opcode_latency_initiation_uniform, "%u,%u",
+         &uniform_latency, &uniform_init);
+  sscanf(trace_opcode_latency_initiation_predicate, "%u,%u",
+         &predicate_latency, &predicate_init);
+  sscanf(trace_opcode_latency_initiation_miscellaneous_queue, "%u,%u",
+         &misc_queue_latency, &misc_queue_init);
+  sscanf(trace_opcode_latency_initiation_miscellaneous_no_queue, "%u,%u",
+         &misc_no_queue_latency, &misc_no_queue_init);
 }
 void trace_config::set_latency(unsigned category, unsigned &latency,
                                unsigned &initiation_interval) const {
@@ -479,11 +520,15 @@ void trace_config::set_latency(unsigned category, unsigned &latency,
   switch (category) {
     case ALU_OP:
     case INTP_OP:
-    case BRANCH_OP:
     case CALL_OPS:
     case RET_OPS:
       latency = int_latency;
       initiation_interval = int_init;
+      break;
+    // Phase 3 Step A: BRANCH_OP separated from INT bucket.
+    case BRANCH_OP:
+      latency = branch_latency;
+      initiation_interval = branch_init;
       break;
     case SP_OP:
       latency = fp_latency;
@@ -500,6 +545,27 @@ void trace_config::set_latency(unsigned category, unsigned &latency,
     case TENSOR_CORE_OP:
       latency = tensor_latency;
       initiation_interval = tensor_init;
+      break;
+    // Phase 3 Step A: fine-grained types from MICRO 2025.
+    case HALF_OP:
+      latency = half_latency;
+      initiation_interval = half_init;
+      break;
+    case PREDICATE_OP:
+      latency = predicate_latency;
+      initiation_interval = predicate_init;
+      break;
+    case UNIFORM_OP:
+      latency = uniform_latency;
+      initiation_interval = uniform_init;
+      break;
+    case MISCELLANEOUS_QUEUE_OP:
+      latency = misc_queue_latency;
+      initiation_interval = misc_queue_init;
+      break;
+    case MISCELLANEOUS_NO_QUEUE_OP:
+      latency = misc_no_queue_latency;
+      initiation_interval = misc_no_queue_init;
       break;
     default:
       break;

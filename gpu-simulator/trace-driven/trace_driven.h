@@ -128,6 +128,13 @@ class trace_config {
   unsigned int_init, fp_init, dp_init, sfu_init, tensor_init;
   unsigned specialized_unit_latency[SPECIALIZED_UNIT_NUM];
   unsigned specialized_unit_initiation[SPECIALIZED_UNIT_NUM];
+  // Phase 3 Step A: MICRO 2025 fine-grained instruction type latencies.
+  unsigned branch_latency, branch_init;
+  unsigned half_latency, half_init;
+  unsigned uniform_latency, uniform_init;
+  unsigned predicate_latency, predicate_init;
+  unsigned misc_queue_latency, misc_queue_init;
+  unsigned misc_no_queue_latency, misc_no_queue_init;
 
   char *g_traces_filename;
   char *trace_opcode_latency_initiation_int;
@@ -136,6 +143,13 @@ class trace_config {
   char *trace_opcode_latency_initiation_sfu;
   char *trace_opcode_latency_initiation_tensor;
   char *trace_opcode_latency_initiation_specialized_op[SPECIALIZED_UNIT_NUM];
+  // Phase 3 Step A config strings.
+  char *trace_opcode_latency_initiation_branch;
+  char *trace_opcode_latency_initiation_half;
+  char *trace_opcode_latency_initiation_uniform;
+  char *trace_opcode_latency_initiation_predicate;
+  char *trace_opcode_latency_initiation_miscellaneous_queue;
+  char *trace_opcode_latency_initiation_miscellaneous_no_queue;
 };
 
 class trace_shd_warp_t : public shd_warp_t {

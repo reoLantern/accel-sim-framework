@@ -1,5 +1,7 @@
 // developed by Mahmoud Khairy, Purdue Univ
 // abdallm@purdue.edu
+// Phase 3 Step A: opcode→op_type remapping aligned with MICRO 2025
+// Huerta et al. (turing_opcode.h from their SM75_RTX2070_S config).
 
 #ifndef TURING_OPCODE_H
 #define TURING_OPCODE_H
@@ -11,10 +13,6 @@
 
 #define TURING_BINART_VERSION 75
 
-// TO DO: moving this to a yml or def files
-
-/// Volta SM_70 ISA
-// see: https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html
 static const std::unordered_map<std::string, OpcodeChar> Turing_OpcodeMap = {
     // Floating Point 32 Instructions
     {"FADD", OpcodeChar(OP_FADD, SP_OP)},
@@ -32,21 +30,20 @@ static const std::unordered_map<std::string, OpcodeChar> Turing_OpcodeMap = {
     // SFU
     {"MUFU", OpcodeChar(OP_MUFU, SFU_OP)},
 
-    // Floating Point 16 Instructions
-    {"HADD2", OpcodeChar(OP_HADD2, SP_OP)},
-    {"HADD2_32I", OpcodeChar(OP_HADD2_32I, SP_OP)},
-    {"HFMA2", OpcodeChar(OP_HFMA2, SP_OP)},
-    {"HFMA2_32I", OpcodeChar(OP_HFMA2_32I, SP_OP)},
-    {"HMUL2", OpcodeChar(OP_HMUL2, SP_OP)},
-    {"HMUL2_32I", OpcodeChar(OP_HMUL2_32I, SP_OP)},
-    {"HSET2", OpcodeChar(OP_HSET2, SP_OP)},
-    {"HSETP2", OpcodeChar(OP_HSETP2, SP_OP)},
+    // Floating Point 16 Instructions [MICRO25: SP_OP → HALF_OP]
+    {"HADD2", OpcodeChar(OP_HADD2, HALF_OP)},
+    {"HADD2_32I", OpcodeChar(OP_HADD2_32I, HALF_OP)},
+    {"HFMA2", OpcodeChar(OP_HFMA2, HALF_OP)},
+    {"HFMA2_32I", OpcodeChar(OP_HFMA2_32I, HALF_OP)},
+    {"HMUL2", OpcodeChar(OP_HMUL2, HALF_OP)},
+    {"HMUL2_32I", OpcodeChar(OP_HMUL2_32I, HALF_OP)},
+    {"HSET2", OpcodeChar(OP_HSET2, HALF_OP)},
+    {"HSETP2", OpcodeChar(OP_HSETP2, HALF_OP)},
 
-    // Tensor Core Instructions
-    // Execute Tensor Core Instructions on SPECIALIZED_UNIT_3
-    {"HMMA", OpcodeChar(OP_HMMA, SPECIALIZED_UNIT_3_OP)},
-    {"BMMA", OpcodeChar(OP_BMMA, SPECIALIZED_UNIT_3_OP)},
-    {"IMMA", OpcodeChar(OP_IMMA, SPECIALIZED_UNIT_3_OP)},
+    // Tensor Core Instructions [MICRO25: SPECIALIZED_UNIT_3 → TENSOR_CORE_OP]
+    {"HMMA", OpcodeChar(OP_HMMA, TENSOR_CORE_OP)},
+    {"BMMA", OpcodeChar(OP_BMMA, TENSOR_CORE_OP)},
+    {"IMMA", OpcodeChar(OP_IMMA, TENSOR_CORE_OP)},
 
     // Double Point Instructions
     {"DADD", OpcodeChar(OP_DADD, DP_OP)},
@@ -64,7 +61,8 @@ static const std::unordered_map<std::string, OpcodeChar> Turing_OpcodeMap = {
     {"IADD32I", OpcodeChar(OP_IADD32I, INTP_OP)},
     {"IDP", OpcodeChar(OP_IDP, INTP_OP)},
     {"IDP4A", OpcodeChar(OP_IDP4A, INTP_OP)},
-    {"IMAD", OpcodeChar(OP_IMAD, INTP_OP)},
+    // [MICRO25: IMAD goes to SP_OP, not INTP_OP — shares FP32 FU]
+    {"IMAD", OpcodeChar(OP_IMAD, SP_OP)},
     {"IMNMX", OpcodeChar(OP_IMNMX, INTP_OP)},
     {"IMUL", OpcodeChar(OP_IMUL, INTP_OP)},
     {"IMUL32I", OpcodeChar(OP_IMUL32I, INTP_OP)},
@@ -77,43 +75,42 @@ static const std::unordered_map<std::string, OpcodeChar> Turing_OpcodeMap = {
     {"LOP32I", OpcodeChar(OP_LOP32I, INTP_OP)},
     {"POPC", OpcodeChar(OP_POPC, INTP_OP)},
     {"SHF", OpcodeChar(OP_SHF, INTP_OP)},
-    {"SHL", OpcodeChar(OP_SHL, INTP_OP)},  //////////
+    {"SHL", OpcodeChar(OP_SHL, INTP_OP)},
     {"SHR", OpcodeChar(OP_SHR, INTP_OP)},
     {"VABSDIFF", OpcodeChar(OP_VABSDIFF, INTP_OP)},
     {"VABSDIFF4", OpcodeChar(OP_VABSDIFF4, INTP_OP)},
 
-    // Conversion Instructions
-    {"F2F", OpcodeChar(OP_F2F, ALU_OP)},
-    {"F2FP", OpcodeChar(OP_F2FP, ALU_OP)},
-    {"F2I", OpcodeChar(OP_F2I, ALU_OP)},
-    {"I2F", OpcodeChar(OP_I2F, ALU_OP)},
-    {"I2I", OpcodeChar(OP_I2I, ALU_OP)},
-    {"I2IP", OpcodeChar(OP_I2IP, ALU_OP)},
-    {"FRND", OpcodeChar(OP_FRND, ALU_OP)},
+    // Conversion Instructions [MICRO25: ALU_OP → SFU_OP/DP_OP]
+    {"F2F", OpcodeChar(OP_F2F, DP_OP)},
+    {"F2FP", OpcodeChar(OP_F2FP, SFU_OP)},
+    {"F2I", OpcodeChar(OP_F2I, SFU_OP)},
+    {"I2F", OpcodeChar(OP_I2F, SFU_OP)},
+    {"I2I", OpcodeChar(OP_I2I, SFU_OP)},
+    {"I2IP", OpcodeChar(OP_I2IP, SFU_OP)},
+    {"FRND", OpcodeChar(OP_FRND, SFU_OP)},
 
     // Movement Instructions
     {"MOV", OpcodeChar(OP_MOV, ALU_OP)},
     {"MOV32I", OpcodeChar(OP_MOV32I, ALU_OP)},
-    {"MOVM", OpcodeChar(OP_MOVM, ALU_OP)},  // move matrix
+    {"MOVM", OpcodeChar(OP_MOVM, ALU_OP)},
     {"PRMT", OpcodeChar(OP_PRMT, ALU_OP)},
     {"SEL", OpcodeChar(OP_SEL, ALU_OP)},
     {"SGXT", OpcodeChar(OP_SGXT, ALU_OP)},
     {"SHFL", OpcodeChar(OP_SHFL, ALU_OP)},
 
-    // Predicate Instructions
-    {"PLOP3", OpcodeChar(OP_PLOP3, ALU_OP)},
-    {"PSETP", OpcodeChar(OP_PSETP, ALU_OP)},
-    {"P2R", OpcodeChar(OP_P2R, ALU_OP)},
-    {"R2P", OpcodeChar(OP_R2P, ALU_OP)},
+    // Predicate Instructions [MICRO25: ALU_OP → PREDICATE_OP]
+    {"PLOP3", OpcodeChar(OP_PLOP3, PREDICATE_OP)},
+    {"PSETP", OpcodeChar(OP_PSETP, PREDICATE_OP)},
+    {"P2R", OpcodeChar(OP_P2R, PREDICATE_OP)},
+    {"R2P", OpcodeChar(OP_R2P, PREDICATE_OP)},
 
     // Load/Store Instructions
     {"LD", OpcodeChar(OP_LD, LOAD_OP)},
-    // For now, we ignore constant loads, consider it as ALU_OP, TO DO
     {"LDC", OpcodeChar(OP_LDC, ALU_OP)},
     {"LDG", OpcodeChar(OP_LDG, LOAD_OP)},
     {"LDL", OpcodeChar(OP_LDL, LOAD_OP)},
     {"LDS", OpcodeChar(OP_LDS, LOAD_OP)},
-    {"LDSM", OpcodeChar(OP_LDSM, LOAD_OP)},  //
+    {"LDSM", OpcodeChar(OP_LDSM, LOAD_OP)},
     {"ST", OpcodeChar(OP_ST, STORE_OP)},
     {"STG", OpcodeChar(OP_STG, STORE_OP)},
     {"STL", OpcodeChar(OP_STL, STORE_OP)},
@@ -130,40 +127,36 @@ static const std::unordered_map<std::string, OpcodeChar> Turing_OpcodeMap = {
     {"MEMBAR", OpcodeChar(OP_MEMBAR, MEMORY_BARRIER_OP)},
     {"CCTLT", OpcodeChar(OP_CCTLT, ALU_OP)},
 
-    // Uniform Datapath Instruction
-    // UDP unit
-    // for more info about UDP, see
-    // https://www.hotchips.org/hc31/HC31_2.12_NVIDIA_final.pdf
-    {"R2UR", OpcodeChar(OP_R2UR, SPECIALIZED_UNIT_4_OP)},
-    {"S2UR", OpcodeChar(OP_S2UR, SPECIALIZED_UNIT_4_OP)},
-    {"UBMSK", OpcodeChar(OP_UBMSK, SPECIALIZED_UNIT_4_OP)},
-    {"UBREV", OpcodeChar(OP_UBREV, SPECIALIZED_UNIT_4_OP)},
-    {"UCLEA", OpcodeChar(OP_UCLEA, SPECIALIZED_UNIT_4_OP)},
-    {"UFLO", OpcodeChar(OP_UFLO, SPECIALIZED_UNIT_4_OP)},
-    {"UIADD3", OpcodeChar(OP_UIADD3, SPECIALIZED_UNIT_4_OP)},
-    {"UIMAD", OpcodeChar(OP_UIMAD, SPECIALIZED_UNIT_4_OP)},
-    {"UISETP", OpcodeChar(OP_UISETP, SPECIALIZED_UNIT_4_OP)},
-    {"ULDC", OpcodeChar(OP_ULDC, SPECIALIZED_UNIT_4_OP)},
-    {"ULEA", OpcodeChar(OP_ULEA, SPECIALIZED_UNIT_4_OP)},
-    {"ULOP", OpcodeChar(OP_ULOP, SPECIALIZED_UNIT_4_OP)},
-    {"ULOP3", OpcodeChar(OP_ULOP3, SPECIALIZED_UNIT_4_OP)},
-    {"ULOP32I", OpcodeChar(OP_ULOP32I, SPECIALIZED_UNIT_4_OP)},
-    {"UMOV", OpcodeChar(OP_UMOV, SPECIALIZED_UNIT_4_OP)},
-    {"UP2UR", OpcodeChar(OP_UP2UR, SPECIALIZED_UNIT_4_OP)},
-    {"UPLOP3", OpcodeChar(OP_UPLOP3, SPECIALIZED_UNIT_4_OP)},
-    {"UPOPC", OpcodeChar(OP_UPOPC, SPECIALIZED_UNIT_4_OP)},
-    {"UPRMT", OpcodeChar(OP_UPRMT, SPECIALIZED_UNIT_4_OP)},
-    {"UPSETP", OpcodeChar(OP_UPSETP, SPECIALIZED_UNIT_4_OP)},
-    {"UR2UP", OpcodeChar(OP_UR2UP, SPECIALIZED_UNIT_4_OP)},
-    {"USEL", OpcodeChar(OP_USEL, SPECIALIZED_UNIT_4_OP)},
-    {"USGXT", OpcodeChar(OP_USGXT, SPECIALIZED_UNIT_4_OP)},
-    {"USHF", OpcodeChar(OP_USHF, SPECIALIZED_UNIT_4_OP)},
-    {"USHL", OpcodeChar(OP_USHL, SPECIALIZED_UNIT_4_OP)},
-    {"USHR", OpcodeChar(OP_USHR, SPECIALIZED_UNIT_4_OP)},
-    {"VOTEU", OpcodeChar(OP_VOTEU, SPECIALIZED_UNIT_4_OP)},
+    // Uniform Datapath Instructions [MICRO25: SPECIALIZED_UNIT_4 → UNIFORM_OP]
+    {"R2UR", OpcodeChar(OP_R2UR, UNIFORM_OP)},
+    {"S2UR", OpcodeChar(OP_S2UR, UNIFORM_OP)},
+    {"UBMSK", OpcodeChar(OP_UBMSK, UNIFORM_OP)},
+    {"UBREV", OpcodeChar(OP_UBREV, UNIFORM_OP)},
+    {"UCLEA", OpcodeChar(OP_UCLEA, UNIFORM_OP)},
+    {"UFLO", OpcodeChar(OP_UFLO, UNIFORM_OP)},
+    {"UIADD3", OpcodeChar(OP_UIADD3, UNIFORM_OP)},
+    {"UIMAD", OpcodeChar(OP_UIMAD, UNIFORM_OP)},
+    {"UISETP", OpcodeChar(OP_UISETP, UNIFORM_OP)},
+    {"ULDC", OpcodeChar(OP_ULDC, UNIFORM_OP)},
+    {"ULEA", OpcodeChar(OP_ULEA, UNIFORM_OP)},
+    {"ULOP", OpcodeChar(OP_ULOP, UNIFORM_OP)},
+    {"ULOP3", OpcodeChar(OP_ULOP3, UNIFORM_OP)},
+    {"ULOP32I", OpcodeChar(OP_ULOP32I, UNIFORM_OP)},
+    {"UMOV", OpcodeChar(OP_UMOV, UNIFORM_OP)},
+    {"UP2UR", OpcodeChar(OP_UP2UR, UNIFORM_OP)},
+    {"UPLOP3", OpcodeChar(OP_UPLOP3, UNIFORM_OP)},
+    {"UPOPC", OpcodeChar(OP_UPOPC, UNIFORM_OP)},
+    {"UPRMT", OpcodeChar(OP_UPRMT, UNIFORM_OP)},
+    {"UPSETP", OpcodeChar(OP_UPSETP, UNIFORM_OP)},
+    {"UR2UP", OpcodeChar(OP_UR2UP, UNIFORM_OP)},
+    {"USEL", OpcodeChar(OP_USEL, UNIFORM_OP)},
+    {"USGXT", OpcodeChar(OP_USGXT, UNIFORM_OP)},
+    {"USHF", OpcodeChar(OP_USHF, UNIFORM_OP)},
+    {"USHL", OpcodeChar(OP_USHL, UNIFORM_OP)},
+    {"USHR", OpcodeChar(OP_USHR, UNIFORM_OP)},
+    {"VOTEU", OpcodeChar(OP_VOTEU, UNIFORM_OP)},
 
-    // Texture Instructions
-    // For now, we ignore texture loads, consider it as ALU_OP
+    // Texture Instructions (keep as SPECIALIZED_UNIT_2)
     {"TEX", OpcodeChar(OP_TEX, SPECIALIZED_UNIT_2_OP)},
     {"TLD", OpcodeChar(OP_TLD, SPECIALIZED_UNIT_2_OP)},
     {"TLD4", OpcodeChar(OP_TLD4, SPECIALIZED_UNIT_2_OP)},
@@ -171,51 +164,50 @@ static const std::unordered_map<std::string, OpcodeChar> Turing_OpcodeMap = {
     {"TXD", OpcodeChar(OP_TXD, SPECIALIZED_UNIT_2_OP)},
     {"TXQ", OpcodeChar(OP_TXQ, SPECIALIZED_UNIT_2_OP)},
 
-    // Surface Instructions //
+    // Surface Instructions
     {"SUATOM", OpcodeChar(OP_SUATOM, ALU_OP)},
     {"SULD", OpcodeChar(OP_SULD, ALU_OP)},
     {"SURED", OpcodeChar(OP_SURED, ALU_OP)},
     {"SUST", OpcodeChar(OP_SUST, ALU_OP)},
 
-    // Control Instructions
-    // execute branch insts on a dedicated branch unit (SPECIALIZED_UNIT_1)
-    {"BMOV", OpcodeChar(OP_BMOV, SPECIALIZED_UNIT_1_OP)},
-    {"BPT", OpcodeChar(OP_BPT, SPECIALIZED_UNIT_1_OP)},
-    {"BRA", OpcodeChar(OP_BRA, SPECIALIZED_UNIT_1_OP)},
-    {"BREAK", OpcodeChar(OP_BREAK, SPECIALIZED_UNIT_1_OP)},
-    {"BRX", OpcodeChar(OP_BRX, SPECIALIZED_UNIT_1_OP)},
-    {"BRXU", OpcodeChar(OP_BRXU, SPECIALIZED_UNIT_1_OP)},  //
-    {"BSSY", OpcodeChar(OP_BSSY, SPECIALIZED_UNIT_1_OP)},
-    {"BSYNC", OpcodeChar(OP_BSYNC, SPECIALIZED_UNIT_1_OP)},
-    {"CALL", OpcodeChar(OP_CALL, SPECIALIZED_UNIT_1_OP)},
+    // Control Instructions [MICRO25: SPECIALIZED_UNIT_1 → BRANCH_OP]
+    {"BMOV", OpcodeChar(OP_BMOV, BRANCH_OP)},
+    {"BPT", OpcodeChar(OP_BPT, BRANCH_OP)},
+    {"BRA", OpcodeChar(OP_BRA, BRANCH_OP)},
+    {"BREAK", OpcodeChar(OP_BREAK, BRANCH_OP)},
+    {"BRX", OpcodeChar(OP_BRX, BRANCH_OP)},
+    {"BRXU", OpcodeChar(OP_BRXU, BRANCH_OP)},
+    {"BSSY", OpcodeChar(OP_BSSY, BRANCH_OP)},
+    {"BSYNC", OpcodeChar(OP_BSYNC, BRANCH_OP)},
+    {"CALL", OpcodeChar(OP_CALL, CALL_OPS)},
     {"EXIT", OpcodeChar(OP_EXIT, EXIT_OPS)},
-    {"JMP", OpcodeChar(OP_JMP, SPECIALIZED_UNIT_1_OP)},
-    {"JMX", OpcodeChar(OP_JMX, SPECIALIZED_UNIT_1_OP)},
-    {"JMXU", OpcodeChar(OP_JMXU, SPECIALIZED_UNIT_1_OP)},  ///
-    {"KILL", OpcodeChar(OP_KILL, SPECIALIZED_UNIT_3_OP)},
-    {"NANOSLEEP", OpcodeChar(OP_NANOSLEEP, SPECIALIZED_UNIT_1_OP)},
-    {"RET", OpcodeChar(OP_RET, SPECIALIZED_UNIT_1_OP)},
-    {"RPCMOV", OpcodeChar(OP_RPCMOV, SPECIALIZED_UNIT_1_OP)},
-    {"RTT", OpcodeChar(OP_RTT, SPECIALIZED_UNIT_1_OP)},
-    {"WARPSYNC", OpcodeChar(OP_WARPSYNC, SPECIALIZED_UNIT_1_OP)},
-    {"YIELD", OpcodeChar(OP_YIELD, SPECIALIZED_UNIT_1_OP)},
+    {"JMP", OpcodeChar(OP_JMP, BRANCH_OP)},
+    {"JMX", OpcodeChar(OP_JMX, BRANCH_OP)},
+    {"JMXU", OpcodeChar(OP_JMXU, BRANCH_OP)},
+    {"KILL", OpcodeChar(OP_KILL, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"NANOSLEEP", OpcodeChar(OP_NANOSLEEP, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"RET", OpcodeChar(OP_RET, RET_OPS)},
+    {"RPCMOV", OpcodeChar(OP_RPCMOV, BRANCH_OP)},
+    {"RTT", OpcodeChar(OP_RTT, BRANCH_OP)},
+    {"WARPSYNC", OpcodeChar(OP_WARPSYNC, BRANCH_OP)},
+    {"YIELD", OpcodeChar(OP_YIELD, BRANCH_OP)},
 
-    // Miscellaneous Instructions
-    {"B2R", OpcodeChar(OP_B2R, ALU_OP)},
+    // Miscellaneous Instructions [MICRO25: ALU_OP → MISCELLANEOUS_NO_QUEUE_OP]
+    {"B2R", OpcodeChar(OP_B2R, MISCELLANEOUS_NO_QUEUE_OP)},
     {"BAR", OpcodeChar(OP_BAR, BARRIER_OP)},
-    {"CS2R", OpcodeChar(OP_CS2R, ALU_OP)},
-    {"CSMTEST", OpcodeChar(OP_CSMTEST, ALU_OP)},
+    {"CS2R", OpcodeChar(OP_CS2R, INTP_OP)},
+    {"CSMTEST", OpcodeChar(OP_CSMTEST, MISCELLANEOUS_NO_QUEUE_OP)},
     {"DEPBAR", OpcodeChar(OP_DEPBAR, ALU_OP)},
-    {"GETLMEMBASE", OpcodeChar(OP_GETLMEMBASE, ALU_OP)},
-    {"LEPC", OpcodeChar(OP_LEPC, ALU_OP)},
-    {"NOP", OpcodeChar(OP_NOP, ALU_OP)},
-    {"PMTRIG", OpcodeChar(OP_PMTRIG, ALU_OP)},
-    {"R2B", OpcodeChar(OP_R2B, ALU_OP)},
-    {"S2R", OpcodeChar(OP_S2R, ALU_OP)},
-    {"SETCTAID", OpcodeChar(OP_SETCTAID, ALU_OP)},
-    {"SETLMEMBASE", OpcodeChar(OP_SETLMEMBASE, ALU_OP)},
-    {"VOTE", OpcodeChar(OP_VOTE, ALU_OP)},
-    {"VOTE_VTG", OpcodeChar(OP_VOTE_VTG, ALU_OP)},
+    {"GETLMEMBASE", OpcodeChar(OP_GETLMEMBASE, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"LEPC", OpcodeChar(OP_LEPC, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"NOP", OpcodeChar(OP_NOP, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"PMTRIG", OpcodeChar(OP_PMTRIG, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"R2B", OpcodeChar(OP_R2B, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"S2R", OpcodeChar(OP_S2R, MISCELLANEOUS_QUEUE_OP)},
+    {"SETCTAID", OpcodeChar(OP_SETCTAID, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"SETLMEMBASE", OpcodeChar(OP_SETLMEMBASE, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"VOTE", OpcodeChar(OP_VOTE, MISCELLANEOUS_NO_QUEUE_OP)},
+    {"VOTE_VTG", OpcodeChar(OP_VOTE_VTG, MISCELLANEOUS_NO_QUEUE_OP)},
 
 };
 
