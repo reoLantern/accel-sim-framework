@@ -147,6 +147,10 @@ class trace_config {
   void reg_options(option_parser_t opp);
   char *get_traces_filename() { return g_traces_filename; }
 
+  // MICRO 2025 port: getters used by warp_inst_t::assign_predicate_latencies_if_needed.
+  unsigned get_int_latency() const { return int_latency; }
+  unsigned get_int_init() const { return int_init; }
+
  private:
   unsigned int_latency, fp_latency, dp_latency, sfu_latency, tensor_latency;
   unsigned int_init, fp_init, dp_init, sfu_init, tensor_init;
