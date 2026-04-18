@@ -40,6 +40,8 @@
 #include "../ISA_Def/trace_opcode.h"
 #include "../trace-parser/trace_parser.h"
 #include "abstract_hardware_model.h"
+#include "cuda-sim/ptx_ir.h"            // MICRO 2025 port: function_info full defn needed for trace_function_info
+#include "gpgpu-sim/gpu-sim.h"          // MICRO 2025 port: gpgpu_sim / gpgpu_sim_config full defn needed for trace_gpgpu_sim
 #include "gpgpu-sim/shader.h"
 
 class trace_function_info : public function_info {
@@ -156,6 +158,11 @@ class trace_shd_warp_t : public shd_warp_t {
   void set_kernel(trace_kernel_info_t *kernel_info) {
     m_kernel_info = kernel_info;
   }
+
+  // MICRO 2025 port: IBuffer_Remodeled calls decrease_num_used_inst(pc) when
+  // an entry leaves the buffer.  v2 doesn't track this reuse-count (the
+  // trace is streamed warp-at-a-time from a file), so the call is a no-op.
+  void decrease_num_used_inst(address_type /*pc*/) {}
 
  private:
   unsigned trace_pc;
