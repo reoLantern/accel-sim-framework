@@ -43,6 +43,19 @@
 #include "cuda-sim/ptx_ir.h"            // MICRO 2025 port: function_info full defn needed for trace_function_info
 #include "gpgpu-sim/gpu-sim.h"          // MICRO 2025 port: gpgpu_sim / gpgpu_sim_config full defn needed for trace_gpgpu_sim
 #include "gpgpu-sim/shader.h"
+#include "gpgpu-sim/trace_data/traced_execution_stub.h"  // MICRO 2025 port: traced_execution stub for sm.cc call sites
+
+// MICRO 2025 port: per-PC instruction-usage bucket referenced by the SM
+// scheduler when reading from trace.  v2 streams warp traces one at a time,
+// so this struct is never actually populated; stub suffices for compile.
+struct traced_instructions_by_pc {
+  traced_instructions_by_pc(address_type /*pc*/,
+                            unsigned int /*size_num_used_instructions*/) {}
+  address_type pc = 0;
+  std::vector<inst_trace_t> instructions;
+  unsigned int num_traced_instructions = 0;
+  std::vector<unsigned int> num_used_instructions;
+};
 
 class trace_function_info : public function_info {
  public:
@@ -94,6 +107,15 @@ class trace_kernel_info_t : public kernel_info_t {
 
   void get_next_threadblock_traces(
       std::vector<std::vector<inst_trace_t> *> threadblock_traces);
+
+  // MICRO 2025 port: 4-arg overload called by remodeling/sm.cc.  Stage 1
+  // stub: no-op (the SM path is behind is_SM_remodeling_enabled=0).
+  void get_next_threadblock_traces(
+      std::vector<std::map<address_type, traced_instructions_by_pc> *>
+          /*threadblock_traces*/,
+      std::vector<std::vector<address_type> *> /*threadblock_traced_pcs*/,
+      class gpgpu_sim * /*gpu*/,
+      traced_execution & /*static_trace_info*/) { /* no-op stub */ }
 
   unsigned long long get_cuda_stream_id() {
     return m_kernel_trace_info->cuda_stream_id;
@@ -147,9 +169,22 @@ class trace_shd_warp_t : public shd_warp_t {
     trace_pc = 0;
     m_kernel_info = NULL;
   }
+  // MICRO 2025 port: SM (remodeling) passes shader_core_ctx_wrapper* + stats*
+  trace_shd_warp_t(class shader_core_ctx_wrapper *shader, unsigned warp_size,
+                   class shader_core_stats *stats)
+      : shd_warp_t(shader, warp_size, stats) {
+    trace_pc = 0;
+    m_kernel_info = NULL;
+  }
 
   std::vector<inst_trace_t> warp_traces;
   const trace_warp_inst_t *get_next_trace_inst();
+  // MICRO 2025 port: 1-arg overload called by remodeling ibuffer; Stage 1 stub
+  // forwards to the 0-arg form (PC-filter is a Stage 1d tracer feature).
+  // Returns non-const trace_warp_inst_t* to match MICRO 2025 callsite expectation.
+  trace_warp_inst_t *get_next_trace_inst(address_type /*pc_filter*/) {
+    return const_cast<trace_warp_inst_t *>(get_next_trace_inst());
+  }
   void clear();
   bool trace_done();
   address_type get_start_trace_pc();
@@ -163,6 +198,12 @@ class trace_shd_warp_t : public shd_warp_t {
   // an entry leaves the buffer.  v2 doesn't track this reuse-count (the
   // trace is streamed warp-at-a-time from a file), so the call is a no-op.
   void decrease_num_used_inst(address_type /*pc*/) {}
+
+  // MICRO 2025 port: per-pc instruction map exposed publicly in their
+  // trace_shd_warp_t.  Stage 1 stub: empty maps — vanilla path never uses
+  // them; remodeling path doesn't reach this point either.
+  std::vector<address_type> traced_pcs;
+  std::map<address_type, traced_instructions_by_pc> map_warp_traces;
 
  private:
   unsigned trace_pc;
