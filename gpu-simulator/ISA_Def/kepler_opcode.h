@@ -6,7 +6,7 @@
 
 #include <string>
 #include <unordered_map>
-#include "abstract_hardware_model.h"
+#include "../gpgpu-sim/src/operation_type.h"
 #include "trace_opcode.h"
 
 #define KEPLER_BINART_VERSION 35

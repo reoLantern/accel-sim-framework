@@ -1,6 +1,7 @@
 // developed by Mahmoud Khairy, Purdue Univ
 
 #include <assert.h>
+#include <bitset>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

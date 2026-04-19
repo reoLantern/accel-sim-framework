@@ -6,7 +6,6 @@
 
 #include <string>
 #include <unordered_map>
-#include "abstract_hardware_model.h"
 
 enum TraceInstrOpcode {
   // Volta (includes common insts for others cards as well)
@@ -62,7 +61,10 @@ enum TraceInstrOpcode {
   OP_SHR,
   OP_VABSDIFF,
   OP_VABSDIFF4,
+  OP_VIMNMX,
+  OP_VIMNMX3,
   OP_VADD,
+  OP_F2FP,
   OP_F2F,
   OP_F2I,
   OP_I2F,
@@ -94,10 +96,12 @@ enum TraceInstrOpcode {
   OP_ATOMS,
   OP_ATOMG,
   OP_RED,
+  OP_REDG,
   OP_CCTL,
   OP_CCTLL,
   OP_ERRBAR,
   OP_MEMBAR,
+  OP_CGAERRBAR,
   OP_CCTLT,
   OP_TEX,
   OP_TLD,
@@ -196,6 +200,14 @@ enum TraceInstrOpcode {
   OP_USHF,
   OP_USHL,
   OP_USHR,
+  OP_UVIMNMX,
+  OP_UFADD,
+  OP_UFMUL,
+  OP_UI2F,
+  OP_UI2FP,
+  OP_UI2I,
+  OP_UI2IP,
+  OP_UFFMA,
   OP_VOTEU,
   OP_SUATOM,
   OP_SULD,
@@ -225,8 +237,6 @@ enum TraceInstrOpcode {
   OP_REDUX,
   OP_UF2FP,
   OP_SUQUERY,
-  // Shared between ampere and turing
-  OP_F2FP,
   SASS_NUM_OPCODES /* The total number of opcodes. */
 };
 typedef enum TraceInstrOpcode sass_op_type;

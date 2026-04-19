@@ -1,22 +1,46 @@
-// developed by Mahmoud Khairy, Purdue Univ
-// abdallm@purdue.edu
+// Copyright (c) 2023-2025, Rodrigo Huerta, Mojtaba Abaie Shoushtary, Josep-Llorenç Cruz, Antonio González
+// Universitat Politecnica de Catalunya
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// Redistributions of source code must retain the above copyright notice, this
+// list of conditions and the following disclaimer.
+// Redistributions in binary form must reproduce the above copyright notice,
+// this list of conditions and the following disclaimer in the documentation
+// and/or other materials provided with the distribution. Neither the name of
+// The Universitat Politecnica de Catalunya nor the names of its contributors may be
+// used to endorse or promote products derived from this software without
+// specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef VOLTA_OPCODE_H
-#define VOLTA_OPCODE_H
+#ifndef BLACKWELL_OPCODE_H
+#define BLACKWELL_OPCODE_H
 
 #include <string>
 #include <unordered_map>
 #include "../gpgpu-sim/src/operation_type.h"
 #include "trace_opcode.h"
 
-#define VOLTA_BINART_VERSION 70
-#define VOLTA_JETSON_BINART_VERSION 72
+#define BLACKWELL_RTX_BINART_VERSION 120
 
 // TO DO: moving this to a yml or def files
 
-/// Volta SM_70 ISA
-// see: https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html
-static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
+/// Blackwell ISA
+// see:https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html#ampere
+static const std::unordered_map<std::string, OpcodeChar> Blackwell_OpcodeMap = {
     // Floating Point 32 Instructions
     {"FADD", OpcodeChar(OP_FADD, SP_OP)},
     {"FADD32I", OpcodeChar(OP_FADD32I, SP_OP)},
@@ -42,10 +66,14 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"HMUL2_32I", OpcodeChar(OP_HMUL2_32I, HALF_OP)},
     {"HSET2", OpcodeChar(OP_HSET2, HALF_OP)},
     {"HSETP2", OpcodeChar(OP_HSETP2, HALF_OP)},
+    {"HMNMX2", OpcodeChar(OP_HMNMX2, HALF_OP)},
 
     // Tensor Core Instructions
     // Execute Tensor Core Instructions on SPECIALIZED_UNIT_3
     {"HMMA", OpcodeChar(OP_HMMA, TENSOR_CORE_OP)},
+    {"DMMA", OpcodeChar(OP_DMMA, DP_OP)},
+    {"BMMA", OpcodeChar(OP_BMMA, TENSOR_CORE_OP)},
+    {"IMMA", OpcodeChar(OP_IMMA, TENSOR_CORE_OP)},
 
     // Double Point Instructions
     {"DADD", OpcodeChar(OP_DADD, DP_OP)},
@@ -64,7 +92,6 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"IDP", OpcodeChar(OP_IDP, INTP_OP)},
     {"IDP4A", OpcodeChar(OP_IDP4A, INTP_OP)},
     {"IMAD", OpcodeChar(OP_IMAD, SP_OP)},
-    {"IMMA", OpcodeChar(OP_IMMA, SP_OP)},
     {"IMNMX", OpcodeChar(OP_IMNMX, INTP_OP)},
     {"IMUL", OpcodeChar(OP_IMUL, INTP_OP)},
     {"IMUL32I", OpcodeChar(OP_IMUL32I, INTP_OP)},
@@ -77,25 +104,32 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"LOP32I", OpcodeChar(OP_LOP32I, INTP_OP)},
     {"POPC", OpcodeChar(OP_POPC, INTP_OP)},
     {"SHF", OpcodeChar(OP_SHF, INTP_OP)},
+    {"SHL", OpcodeChar(OP_SHL, INTP_OP)},  //////////
     {"SHR", OpcodeChar(OP_SHR, INTP_OP)},
     {"VABSDIFF", OpcodeChar(OP_VABSDIFF, INTP_OP)},
     {"VABSDIFF4", OpcodeChar(OP_VABSDIFF4, INTP_OP)},
+    {"VIMNMX", OpcodeChar(OP_VIMNMX, INTP_OP)},
+    {"VIMNMX3", OpcodeChar(OP_VIMNMX3, INTP_OP)},
 
     // Conversion Instructions
-    {"F2F", OpcodeChar(OP_F2F, SFU_OP)},
+    {"F2FP", OpcodeChar(OP_F2FP, SFU_OP)},
+    {"F2F", OpcodeChar(OP_F2F, DP_OP)},
     {"F2I", OpcodeChar(OP_F2I, SFU_OP)},
     {"I2F", OpcodeChar(OP_I2F, SFU_OP)},
     {"I2I", OpcodeChar(OP_I2I, SFU_OP)},
     {"I2IP", OpcodeChar(OP_I2IP, SFU_OP)},
+    {"I2FP", OpcodeChar(OP_I2FP, SFU_OP)},
+    {"F2IP", OpcodeChar(OP_F2IP, SFU_OP)},
     {"FRND", OpcodeChar(OP_FRND, SFU_OP)},
 
     // Movement Instructions
     {"MOV", OpcodeChar(OP_MOV, INTP_OP)},
     {"MOV32I", OpcodeChar(OP_MOV32I, INTP_OP)},
+    {"MOVM", OpcodeChar(OP_MOVM, TENSOR_CORE_OP)},  // move matrix
     {"PRMT", OpcodeChar(OP_PRMT, INTP_OP)},
     {"SEL", OpcodeChar(OP_SEL, INTP_OP)},
     {"SGXT", OpcodeChar(OP_SGXT, INTP_OP)},
-    {"SHFL", OpcodeChar(OP_SHFL, INTP_OP)},
+    {"SHFL", OpcodeChar(OP_SHFL, MEMORY_MISCELLANEOUS_OP)},
 
     // Predicate Instructions
     {"PLOP3", OpcodeChar(OP_PLOP3, PREDICATE_OP)},
@@ -107,24 +141,72 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"LD", OpcodeChar(OP_LD, LOAD_OP)},
     // For now, we ignore constant loads, consider it as ALU_OP, TO DO
     {"LDC", OpcodeChar(OP_LDC, LOAD_OP)},
+    {"LDCU", OpcodeChar(OP_LDC, LOAD_OP)},
     {"LDG", OpcodeChar(OP_LDG, LOAD_OP)},
     {"LDL", OpcodeChar(OP_LDL, LOAD_OP)},
     {"LDS", OpcodeChar(OP_LDS, LOAD_OP)},
+    {"LDSM", OpcodeChar(OP_LDSM, LOAD_OP)},  //
     {"ST", OpcodeChar(OP_ST, STORE_OP)},
     {"STG", OpcodeChar(OP_STG, STORE_OP)},
     {"STL", OpcodeChar(OP_STL, STORE_OP)},
     {"STS", OpcodeChar(OP_STS, STORE_OP)},
     {"MATCH", OpcodeChar(OP_MATCH, MEMORY_MISCELLANEOUS_OP)},
     {"QSPC", OpcodeChar(OP_QSPC, MEMORY_MISCELLANEOUS_OP)},
-    {"ATOM", OpcodeChar(OP_ATOM, STORE_OP)},
-    {"ATOMS", OpcodeChar(OP_ATOMS, STORE_OP)},
-    {"ATOMG", OpcodeChar(OP_ATOMG, STORE_OP)},
+    {"ATOM", OpcodeChar(OP_ATOM, LOAD_OP)},
+    {"ATOMS", OpcodeChar(OP_ATOMS, LOAD_OP)},
+    {"ATOMG", OpcodeChar(OP_ATOMG, LOAD_OP)},
     {"RED", OpcodeChar(OP_RED, STORE_OP)},
+    {"REDG", OpcodeChar(OP_REDG, STORE_OP)},
     {"CCTL", OpcodeChar(OP_CCTL, MEMORY_MISCELLANEOUS_OP)},
     {"CCTLL", OpcodeChar(OP_CCTLL, MEMORY_MISCELLANEOUS_OP)},
-    {"ERRBAR", OpcodeChar(OP_ERRBAR, MEMORY_BARRIER_OP)},
+    {"ERRBAR", OpcodeChar(OP_ERRBAR, MISCELLANEOUS_QUEUE_OP)},
     {"MEMBAR", OpcodeChar(OP_MEMBAR, MEMORY_BARRIER_OP)},
+    {"CGAERRBAR", OpcodeChar(OP_ERRBAR, MISCELLANEOUS_QUEUE_OP)},
     {"CCTLT", OpcodeChar(OP_CCTLT, MEMORY_MISCELLANEOUS_OP)},
+
+    {"LDGDEPBAR", OpcodeChar(OP_LDGDEPBAR, LDGDEPBAR_OP)},
+    {"LDGSTS", OpcodeChar(OP_LDGSTS, LOAD_OP)},
+
+    // Uniform Datapath Instruction
+    // UDP unit
+    // for more info about UDP, see
+    // https://www.hotchips.org/hc31/HC31_2.12_NVIDIA_final.pdf
+    {"R2UR", OpcodeChar(OP_R2UR, INTP_OP)},
+    {"S2UR", OpcodeChar(OP_S2UR, MISCELLANEOUS_QUEUE_OP)},
+    {"UBMSK", OpcodeChar(OP_UBMSK, UNIFORM_OP)},
+    {"UBREV", OpcodeChar(OP_UBREV, UNIFORM_OP)},
+    {"UCLEA", OpcodeChar(OP_UCLEA, UNIFORM_OP)},
+    {"UF2FP", OpcodeChar(OP_UF2FP, SFU_OP)},
+    {"UFLO", OpcodeChar(OP_UFLO, UNIFORM_OP)},
+    {"UIADD3", OpcodeChar(OP_UIADD3, UNIFORM_OP)},
+    {"UIMAD", OpcodeChar(OP_UIMAD, UNIFORM_OP)},
+    {"UISETP", OpcodeChar(OP_UISETP, UNIFORM_OP)},
+    {"ULDC", OpcodeChar(OP_ULDC, UNIFORM_OP)},
+    {"ULEA", OpcodeChar(OP_ULEA, UNIFORM_OP)},
+    {"ULOP", OpcodeChar(OP_ULOP, UNIFORM_OP)},
+    {"ULOP3", OpcodeChar(OP_ULOP3, UNIFORM_OP)},
+    {"ULOP32I", OpcodeChar(OP_ULOP32I, UNIFORM_OP)},
+    {"UMOV", OpcodeChar(OP_UMOV, UNIFORM_OP)},
+    {"UP2UR", OpcodeChar(OP_UP2UR, UNIFORM_OP)},
+    {"UPLOP3", OpcodeChar(OP_UPLOP3, UNIFORM_OP)},
+    {"UPOPC", OpcodeChar(OP_UPOPC, UNIFORM_OP)},
+    {"UPRMT", OpcodeChar(OP_UPRMT, UNIFORM_OP)},
+    {"UPSETP", OpcodeChar(OP_UPSETP, UNIFORM_OP)},
+    {"UR2UP", OpcodeChar(OP_UR2UP, UNIFORM_OP)},
+    {"USEL", OpcodeChar(OP_USEL, UNIFORM_OP)},
+    {"USGXT", OpcodeChar(OP_USGXT, UNIFORM_OP)},
+    {"USHF", OpcodeChar(OP_USHF, UNIFORM_OP)},
+    {"USHL", OpcodeChar(OP_USHL, UNIFORM_OP)},
+    {"USHR", OpcodeChar(OP_USHR, UNIFORM_OP)},
+    {"UVIMNMX", OpcodeChar(OP_UVIMNMX, UNIFORM_OP)},
+    {"UFADD", OpcodeChar(OP_UFADD, UNIFORM_OP)},
+    {"UFMUL", OpcodeChar(OP_UFMUL, UNIFORM_OP)},
+    {"UI2F", OpcodeChar(OP_UI2F, UNIFORM_OP)},
+    {"UI2FP", OpcodeChar(OP_UI2FP, UNIFORM_OP)},
+    {"UI2I", OpcodeChar(OP_UI2I, UNIFORM_OP)},
+    {"UI2IP", OpcodeChar(OP_UI2IP, UNIFORM_OP)},
+    {"UFFMA", OpcodeChar(OP_UFFMA, UNIFORM_OP)},
+    {"VOTEU", OpcodeChar(OP_VOTEU, UNIFORM_OP)},
 
     // Texture Instructions
     // For now, we ignore texture loads, consider it as ALU_OP
@@ -135,6 +217,13 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"TXD", OpcodeChar(OP_TXD, TEXTURE_OP)},
     {"TXQ", OpcodeChar(OP_TXQ, TEXTURE_OP)},
 
+    // Surface Instructions //
+    {"SUATOM", OpcodeChar(OP_SUATOM, SURFACE_OP)},
+    {"SULD", OpcodeChar(OP_SULD, SURFACE_OP)},
+    {"SUQUERY", OpcodeChar(OP_SUQUERY, SURFACE_OP)},
+    {"SURED", OpcodeChar(OP_SURED, SURFACE_OP)},
+    {"SUST", OpcodeChar(OP_SUST, SURFACE_OP)},
+
     // Control Instructions
     // execute branch insts on a dedicated branch unit (SPECIALIZED_UNIT_1)
     {"BMOV", OpcodeChar(OP_BMOV, BRANCH_OP)},
@@ -142,21 +231,24 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"BRA", OpcodeChar(OP_BRA, BRANCH_OP)},
     {"BREAK", OpcodeChar(OP_BREAK, BRANCH_OP)},
     {"BRX", OpcodeChar(OP_BRX, BRANCH_OP)},
+    {"BRXU", OpcodeChar(OP_BRXU, BRANCH_OP)},  //
     {"BSSY", OpcodeChar(OP_BSSY, BRANCH_OP)},
     {"BSYNC", OpcodeChar(OP_BSYNC, BRANCH_OP)},
-    {"CALL", OpcodeChar(OP_CALL, BRANCH_OP)},
+    {"CALL", OpcodeChar(OP_CALL, CALL_OPS)},
     {"EXIT", OpcodeChar(OP_EXIT, EXIT_OPS)},
     {"JMP", OpcodeChar(OP_JMP, BRANCH_OP)},
     {"JMX", OpcodeChar(OP_JMX, BRANCH_OP)},
+    {"JMXU", OpcodeChar(OP_JMXU, BRANCH_OP)},  ///
     {"KILL", OpcodeChar(OP_KILL, MISCELLANEOUS_NO_QUEUE_OP)},
     {"NANOSLEEP", OpcodeChar(OP_NANOSLEEP, MISCELLANEOUS_NO_QUEUE_OP)},
-    {"RET", OpcodeChar(OP_RET, BRANCH_OP)},
+    {"RET", OpcodeChar(OP_RET, RET_OPS)},
     {"RPCMOV", OpcodeChar(OP_RPCMOV, BRANCH_OP)},
     {"RTT", OpcodeChar(OP_RTT, BRANCH_OP)},
     {"WARPSYNC", OpcodeChar(OP_WARPSYNC, BRANCH_OP)},
     {"YIELD", OpcodeChar(OP_YIELD, BRANCH_OP)},
 
     // Miscellaneous Instructions
+    {"REDUX", OpcodeChar(OP_REDUX, MISCELLANEOUS_NO_QUEUE_OP)},
     {"B2R", OpcodeChar(OP_B2R, MISCELLANEOUS_NO_QUEUE_OP)},
     {"BAR", OpcodeChar(OP_BAR, BARRIER_OP)},
     {"CS2R", OpcodeChar(OP_CS2R, INTP_OP)},
@@ -167,7 +259,7 @@ static const std::unordered_map<std::string, OpcodeChar> Volta_OpcodeMap = {
     {"NOP", OpcodeChar(OP_NOP, MISCELLANEOUS_NO_QUEUE_OP)},
     {"PMTRIG", OpcodeChar(OP_PMTRIG, MISCELLANEOUS_NO_QUEUE_OP)},
     {"R2B", OpcodeChar(OP_R2B, MISCELLANEOUS_NO_QUEUE_OP)},
-    {"S2R", OpcodeChar(OP_S2R, MISCELLANEOUS_QUEUE_OP)},
+    {"S2R", OpcodeChar(OP_S2R, MEMORY_MISCELLANEOUS_OP)},
     {"SETCTAID", OpcodeChar(OP_SETCTAID, MISCELLANEOUS_NO_QUEUE_OP)},
     {"SETLMEMBASE", OpcodeChar(OP_SETLMEMBASE, MISCELLANEOUS_NO_QUEUE_OP)},
     {"VOTE", OpcodeChar(OP_VOTE, MISCELLANEOUS_NO_QUEUE_OP)},
