@@ -79,6 +79,24 @@
 
 #define TRACER_VERSION 4
 
+// v2 adaptation: CUDA 12+ / CUkernel handle fallback.
+// Under CUDA 13 runtime, cuLaunchKernel may pass a CUkernel handle (not
+// CUfunction), causing cuFuncGetAttribute to return CUDA_ERROR_INVALID_HANDLE
+// and leave the output = 0.  Falls back to cuKernelGetAttribute on error.
+// Cherry-picked from accel-sim-framework upstream commit 3016c658 (#521).
+static int get_attr_with_kernel_fallback(CUfunction func,
+                                         CUfunction_attribute attr) {
+  int value = 0;
+  CUresult res = cuFuncGetAttribute(&value, attr, func);
+  if (res == CUDA_ERROR_INVALID_HANDLE) {
+    CUdevice dev = 0;
+    if (cuCtxGetDevice(&dev) == CUDA_SUCCESS) {
+      cuKernelGetAttribute(&value, attr, (CUkernel)func, dev);
+    }
+  }
+  return value;
+}
+
 /* Channel used to communicate from GPU to CPU receiving thread */
 #define CHANNEL_SIZE (1l << 20)
 
@@ -1053,16 +1071,12 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
         exit(0);
       }
       
-      int nregs = 0;
-      CUDA_SAFECALL(
-          cuFuncGetAttribute(&nregs, CU_FUNC_ATTRIBUTE_NUM_REGS, p->f));
-
-      int shmem_static_nbytes = 0;
-      CUDA_SAFECALL(cuFuncGetAttribute(
-          &shmem_static_nbytes, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, p->f));
-
-      CUDA_SAFECALL(cuFuncGetAttribute(&binary_version,
-                                       CU_FUNC_ATTRIBUTE_BINARY_VERSION, p->f));
+      int nregs = get_attr_with_kernel_fallback(p->f,
+                                                CU_FUNC_ATTRIBUTE_NUM_REGS);
+      int shmem_static_nbytes = get_attr_with_kernel_fallback(
+          p->f, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES);
+      binary_version = get_attr_with_kernel_fallback(
+          p->f, CU_FUNC_ATTRIBUTE_BINARY_VERSION);
 
       get_opcode_map(OpcodeMap, binary_version);
       instrument_function_if_needed(ctx, p->f, device_id);
