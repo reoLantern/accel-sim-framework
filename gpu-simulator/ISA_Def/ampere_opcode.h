@@ -11,6 +11,14 @@
 
 #define AMPERE_RTX_BINART_VERSION 86
 #define AMPERE_A100_BINART_VERSION 80
+// v2 extension: Hopper sm_90 reuses the Ampere opcode map.  MICRO 2025's
+// Blackwell_OpcodeMap is effectively "Ampere + ~30 small uniform-datapath
+// additions" and doesn't model WGMMA/TMA/cluster-shared either, so for
+// benchmarks without Hopper-specific SASS (our 12-kernel set + most GEMM
+// variants that don't use cublas H100 WGMMA path), Ampere coverage is
+// sufficient.  Add a dedicated Hopper_OpcodeMap later if cublas/cudnn
+// H100-native kernels become a validation target.
+#define HOPPER_BINART_VERSION 90
 
 // TO DO: moving this to a yml or def files
 
