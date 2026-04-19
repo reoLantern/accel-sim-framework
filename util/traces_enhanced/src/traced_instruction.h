@@ -128,6 +128,16 @@ class traced_instruction : public JSONBase{
 
         void calculate_num_destination_registers();
 
+        // v2 diagnostic (2026-04-20): cross-check that the number of operands
+        // carrying the `.reuse` modifier (text-parsed into m_is_reuse_bit_set)
+        // matches the popcount of the 3-bit reuse field in ctrl_bits
+        // (bits[17:19] of shifted enc[1], = original bits[122:124] of the
+        // 128-bit SASS instruction).  Prints a warning on mismatch.  Intended
+        // to surface nvdisasm text-format drift on future architectures (e.g.
+        // Blackwell) vs. the assumed operand-slot → bit-position mapping.
+        // Safe to call only after all operands have been added.
+        void validate_reuse_bits_crosscheck() const;
+
         unsigned int get_num_destination_registers();
 
         bool has_destination_registers();

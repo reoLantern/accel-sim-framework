@@ -330,6 +330,43 @@ void traced_instruction::add_call_target(std::string target_name, int target_id)
     m_operands.push_back(std::make_unique<traced_operand>(target_name, target_id));
 }
 
+void traced_instruction::validate_reuse_bits_crosscheck() const {
+    // Only runnable when we have the raw encoded instruction (binary-captured
+    // kernels).  No-binary kernels use the 3-arg ctor and leave m_encoded_instruction
+    // empty; skip silently.
+    if (m_encoded_instruction.size() != 2) return;
+
+    // Extract the 3 reuse bits (original inst bits[122:124], = bits[17:19] of
+    // enc[1] >> CCPos_arch_7x_8x).
+    unsigned long long enc1 = 0;
+    try {
+        enc1 = std::stoull(m_encoded_instruction[1], nullptr, 16);
+    } catch (...) {
+        return;  // malformed hex — skip silently
+    }
+    unsigned long long shifted = enc1 >> CCPos_arch_7x_8x;
+    unsigned reuse_bits = static_cast<unsigned>((shifted >> 17) & 0x7);
+    int count_from_bits = __builtin_popcount(reuse_bits);
+
+    // Count operands that text-parsed a `.reuse` modifier.
+    int count_from_text = 0;
+    for (const auto& op : m_operands) {
+        if (op->is_reuse_bit_set()) count_from_text++;
+    }
+
+    // Mismatch: either nvdisasm text omitted a `.reuse` we'd expect from the
+    // hardware bits, or the text produced an extra one.  Trust text (it's the
+    // NVIDIA-maintained source of truth for operand association) and warn.
+    if (count_from_bits != count_from_text) {
+        fprintf(stderr,
+                "[reuse-crosscheck] WARN pc=%s op=%s text_count=%d bits_count=%d "
+                "reuse_bits=0b%u%u%u (trusting text)\n",
+                m_pc_string.c_str(), m_op_code.c_str(),
+                count_from_text, count_from_bits,
+                (reuse_bits >> 2) & 1, (reuse_bits >> 1) & 1, reuse_bits & 1);
+    }
+}
+
 void traced_instruction::calculate_num_destination_registers() {
     if(m_operands.size() == 0) {
         m_num_destination_registers = 0;

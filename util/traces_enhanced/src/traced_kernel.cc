@@ -80,6 +80,7 @@ std::shared_ptr<traced_instruction> create_no_binay_instruction(unsigned int pc,
         }
     }
     instruction->calculate_num_destination_registers();
+    instruction->validate_reuse_bits_crosscheck();  // v2 diagnostic
     return instruction;
 }
 
@@ -182,6 +183,7 @@ void traced_kernel::add_instruction(std::vector<std::string> instruction_part1, 
         }
 
         m_instructions[pc_num]->calculate_num_destination_registers();
+        m_instructions[pc_num]->validate_reuse_bits_crosscheck();  // v2 diagnostic
         m_last_parsed_pc = pc_num;
     }else {
         unsigned int candidate_pc = m_last_parsed_pc + 16;
