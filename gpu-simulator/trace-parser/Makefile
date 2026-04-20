@@ -36,26 +36,26 @@ else
 endif
 
 ifeq ($(GNUC_CPP0X), 1)
-    CXXFLAGS += -std=c++0x
+    CXXFLAGS += -std=c++17
 endif
 
 ifneq ($(DEBUG),1)
 	OPTFLAGS += -O3
 else
-	CXXFLAGS +=
+	CXXFLAGS += 
 endif
 
-OPTFLAGS += -g3 -fPIC -std=c++11
+OPTFLAGS += -g3 -fPIC -std=c++17
 
 SRCS = $(shell ls *.cc)
-EXCLUDES =
+EXCLUDES = 
 CSRCS = $(filter-out $(EXCLUDES), $(SRCS))
 OBJS = $(CSRCS:%.cc=$(BUILD_DIR)/%.o)
 
 trace-parser:$(OBJS)
 
 $(BUILD_DIR)/%.o: %.cc
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -I$(CUDA_INSTALL_PATH)/include -I. -I$(GPGPUSIM_ROOT)/libcuda -I$(GPGPUSIM_ROOT)/src -c $*.cc -o $(BUILD_DIR)/$*.o
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -I$(CUDA_INSTALL_PATH)/include -I. -I$(GPGPUSIM_ROOT)/libcuda -I$(GPGPUSIM_ROOT)/src -c $*.cc -o $(BUILD_DIR)/$*.o 
 
 $(BUILD_DIR)/trace-parser.Makefile.makedepend: depend
 

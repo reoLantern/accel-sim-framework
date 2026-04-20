@@ -15,7 +15,13 @@ accel_sim_framework::accel_sim_framework(std::string config_file,
       gpgpu_trace_sim_init_perf_model(argc, argv, m_gpgpu_context, &tconfig);
   m_gpgpu_sim->init();
 
-  tracer = trace_parser(tconfig.get_traces_filename());
+  // Stage 1d.4+5: MICRO 2025 trace_parser requires 4 args.
+  // is_extra_trace_enabled = whatever trace_config says; kernel-id filter
+  // defaults to "no filter" (0..UINT_MAX).
+  tracer = std::make_unique<trace_parser>(
+      tconfig.get_traces_filename(),
+      tconfig.get_is_extra_traces_enabled(),
+      0u, UINT_MAX);
 
   tconfig.parse_config();
 
@@ -30,7 +36,11 @@ accel_sim_framework::accel_sim_framework(int argc, const char **argv) {
       gpgpu_trace_sim_init_perf_model(argc, argv, m_gpgpu_context, &tconfig);
   m_gpgpu_sim->init();
 
-  tracer = trace_parser(tconfig.get_traces_filename());
+  // Stage 1d.4+5: see 2-arg ctor above for parameter rationale.
+  tracer = std::make_unique<trace_parser>(
+      tconfig.get_traces_filename(),
+      tconfig.get_is_extra_traces_enabled(),
+      0u, UINT_MAX);
 
   tconfig.parse_config();
 
@@ -97,17 +107,21 @@ void accel_sim_framework::parse_commandlist() {
     trace_kernel_info_t *kernel_info = NULL;
     if (commandlist[commandlist_index].m_type == command_type::cpu_gpu_mem_copy) {
       size_t addre, Bcount;
-      tracer.parse_memcpy_info(commandlist[commandlist_index].command_string, addre, Bcount);
+      tracer->parse_memcpy_info(commandlist[commandlist_index].command_string, addre, Bcount);
       std::cout << "launching memcpy command : "
                 << commandlist[commandlist_index].command_string << std::endl;
       m_gpgpu_sim->perf_memcpy_to_gpu(addre, Bcount);
       commandlist_index++;
     } else if (commandlist[commandlist_index].m_type == command_type::kernel_launch) {
       // Read trace header info for window_size number of kernels
+      // Stage 1d.4+5: parse_kernel_info now takes traced_execution& so the
+      // parser can fill in static JSON per-kernel info on the sim side.
       kernel_trace_t *kernel_trace_info =
-          tracer.parse_kernel_info(commandlist[commandlist_index].command_string);
+          tracer->parse_kernel_info(
+              commandlist[commandlist_index].command_string,
+              m_gpgpu_sim->get_extra_trace_info());
       kernel_info = create_kernel_info(kernel_trace_info, m_gpgpu_context,
-                                       &tconfig, &tracer);
+                                       &tconfig, tracer.get());
       kernels_info.push_back(kernel_info);
       std::cout << "Header info loaded for kernel command : "
                 << commandlist[commandlist_index].command_string << std::endl;
@@ -133,7 +147,7 @@ void accel_sim_framework::cleanup(unsigned finished_kernel) {
           break;
         }
       }
-      tracer.kernel_finalizer(k->get_trace_info());
+      tracer->kernel_finalizer(k->get_trace_info());
       delete k->entry();
       delete k;
       kernels_info.erase(kernels_info.begin() + j);
@@ -185,6 +199,13 @@ trace_kernel_info_t *accel_sim_framework::create_kernel_info(kernel_trace_t *ker
   function_info->set_name(kernel_trace_info->kernel_name.c_str());
   trace_kernel_info_t *kernel_info = new trace_kernel_info_t(
       gridDim, blockDim, function_info, parser, config, kernel_trace_info);
+
+  // Stage 1d.5-post: propagate the LIVE-backbone fields from the parsed
+  // kernel_trace_t onto the shared kernel_info_t.  Matches MICRO 2025
+  // main.cc:246,261 (which lived in their entry-point; ours does it at the
+  // wrap-seam instead because we don't replace main.cc).
+  kernel_info->function_unique_id = kernel_trace_info->func_unique_id;
+  kernel_info->is_captured_from_binary = kernel_trace_info->is_cap_from_binary;
 
   return kernel_info;
 }

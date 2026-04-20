@@ -80,14 +80,24 @@ include_directories(trace-parser)
 add_executable(accel-sim.out accel-sim.cc main.cc)
 # Enable OpenMP for accel-sim.out
 find_package(OpenMP REQUIRED)
-target_link_libraries(accel-sim.out PUBLIC cuda ptxsim gpgpusim intersim accelwattch entrypoint)
+# Stage 1d.4+5: gpgpusim now references traced_execution / traced_instruction
+# symbols (via gpu-sim.h's real traced_execution field and remodeling/
+# consumers).  These live in trace-parser; wrap the static-archive group in
+# --start-group/--end-group so the linker can resolve cross-archive cycles.
+target_link_libraries(accel-sim.out PUBLIC
+    -Wl,--start-group
+    cuda ptxsim gpgpusim intersim accelwattch entrypoint
+    trace-driven trace-parser
+    -Wl,--end-group)
 target_link_libraries(accel-sim.out PUBLIC OpenMP::OpenMP_CXX)
 target_link_libraries(accel-sim.out PUBLIC -lm -lz -lGL -pthread)
-target_link_libraries(accel-sim.out PUBLIC trace-driven trace-parser)
 
 pybind11_add_module(accel_sim ./accel-sim.cc ./python_wrapper/python_wrapper.cc)
-target_link_libraries(accel_sim PRIVATE cuda ptxsim gpgpusim intersim accelwattch entrypoint)
-target_link_libraries(accel_sim PRIVATE trace-driven trace-parser)
+target_link_libraries(accel_sim PRIVATE
+    -Wl,--start-group
+    cuda ptxsim gpgpusim intersim accelwattch entrypoint
+    trace-driven trace-parser
+    -Wl,--end-group)
 
 # allow failure for stubgen
 add_custom_target(gen_pyi ALL

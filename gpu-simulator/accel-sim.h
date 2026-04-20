@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -38,7 +39,7 @@ class accel_sim_framework {
                       ? m_gpgpu_sim->get_config().get_max_concurrent_kernel()
                       : 1;
     assert(window_size > 0);
-    commandlist = tracer.parse_commandlist_file();
+    commandlist = tracer->parse_commandlist_file();
 
     kernels_info.reserve(window_size);
   }
@@ -58,7 +59,10 @@ class accel_sim_framework {
  private:
   gpgpu_context *m_gpgpu_context;
   trace_config tconfig;
-  trace_parser tracer;
+  // Stage 1d.4+5: MICRO 2025's trace_parser requires ctor args (path + flags).
+  // Switch from value-member to unique_ptr so we can defer construction until
+  // tconfig is populated.
+  std::unique_ptr<trace_parser> tracer;
   gpgpu_sim *m_gpgpu_sim;
 
   bool concurrent_kernel_sm;

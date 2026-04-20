@@ -1,14 +1,39 @@
-// Copyright (c) 2018-2021, Mahmoud Khairy, Vijay Kandiah, Timothy Rogers, Tor
-// M. Aamodt, Nikos Hardavellas
-// Northwestern University, Purdue University, The
-// University of British Columbia
+// Copyright (c) 2023-2025, Rodrigo Huerta, Mojtaba Abaie Shoushtary, Josep-Llorenç Cruz, Antonio González
+// Universitat Politecnica de Catalunya
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// 1. Redistributions of source code must retain the above copyright notice,
-// this
+// Redistributions of source code must retain the above copyright notice, this
+// list of conditions and the following disclaimer.
+// Redistributions in binary form must reproduce the above copyright notice,
+// this list of conditions and the following disclaimer in the documentation
+// and/or other materials provided with the distribution. Neither the name of
+// The Universitat Politecnica de Catalunya nor the names of its contributors may be
+// used to endorse or promote products derived from this software without
+// specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+// Copyright (c) 2018-2021, Mahmoud Khairy, Vijay Kandiah, Timothy Rogers, Tor M. Aamodt, Nikos Hardavellas
+// Northwestern University, Purdue University, The University of British Columbia
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice, this
 //    list of conditions and the following disclaimer;
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
@@ -39,23 +64,13 @@
 
 #include "../ISA_Def/trace_opcode.h"
 #include "../trace-parser/trace_parser.h"
-#include "abstract_hardware_model.h"
-#include "cuda-sim/ptx_ir.h"            // MICRO 2025 port: function_info full defn needed for trace_function_info
-#include "gpgpu-sim/gpu-sim.h"          // MICRO 2025 port: gpgpu_sim / gpgpu_sim_config full defn needed for trace_gpgpu_sim
-#include "gpgpu-sim/shader.h"
-#include "gpgpu-sim/trace_data/traced_execution_stub.h"  // MICRO 2025 port: traced_execution stub for sm.cc call sites
+#include "../gpgpu-sim/src/abstract_hardware_model.h"
+#include "../gpgpu-sim/src/gpgpu-sim/gpu-sim.h"
+#include "../gpgpu-sim/src/gpgpu-sim/shader.h"
+#include "../gpgpu-sim/src/cuda-sim/ptx_ir.h"
 
-// MICRO 2025 port: per-PC instruction-usage bucket referenced by the SM
-// scheduler when reading from trace.  v2 streams warp traces one at a time,
-// so this struct is never actually populated; stub suffices for compile.
-struct traced_instructions_by_pc {
-  traced_instructions_by_pc(address_type /*pc*/,
-                            unsigned int /*size_num_used_instructions*/) {}
-  address_type pc = 0;
-  std::vector<inst_trace_t> instructions;
-  unsigned int num_traced_instructions = 0;
-  std::vector<unsigned int> num_used_instructions;
-};
+
+void advance_trace_cta_id(kernel_trace_t *kernel_trace_info);
 
 class trace_function_info : public function_info {
  public:
@@ -73,7 +88,7 @@ class trace_function_info : public function_info {
     m_kernel_info = info;
   }
 
-  virtual ~trace_function_info() {}
+  ~trace_function_info() override {}
 };
 
 class trace_warp_inst_t : public warp_inst_t {
@@ -89,10 +104,13 @@ class trace_warp_inst_t : public warp_inst_t {
   }
 
   bool parse_from_trace_struct(
-      const inst_trace_t &trace,
+      inst_trace_t &trace,
       const std::unordered_map<std::string, OpcodeChar> *OpcodeMap,
       const class trace_config *tconfig,
-      const class kernel_trace_t *kernel_trace_info);
+      const class kernel_trace_t *kernel_trace_info,
+      traced_execution &static_trace_info);
+      
+  bool is_s2r() { return m_opcode == OP_S2R; }
 
  private:
   unsigned m_opcode;
@@ -106,18 +124,9 @@ class trace_kernel_info_t : public kernel_info_t {
                       kernel_trace_t *kernel_trace_info);
 
   void get_next_threadblock_traces(
-      std::vector<std::vector<inst_trace_t> *> threadblock_traces);
+      std::vector<std::map<address_type, traced_instructions_by_pc> *> threadblock_traces, std::vector<std::vector<address_type> *> threadblock_traced_pcs, gpgpu_sim *gpu, traced_execution &static_trace_info);
 
-  // MICRO 2025 port: 4-arg overload called by remodeling/sm.cc.  Stage 1
-  // stub: no-op (the SM path is behind is_SM_remodeling_enabled=0).
-  void get_next_threadblock_traces(
-      std::vector<std::map<address_type, traced_instructions_by_pc> *>
-          /*threadblock_traces*/,
-      std::vector<std::vector<address_type> *> /*threadblock_traced_pcs*/,
-      class gpgpu_sim * /*gpu*/,
-      traced_execution & /*static_trace_info*/) { /* no-op stub */ }
-
-  unsigned long long get_cuda_stream_id() {
+  unsigned long get_cuda_stream_id() {
     return m_kernel_trace_info->cuda_stream_id;
   }
 
@@ -127,11 +136,11 @@ class trace_kernel_info_t : public kernel_info_t {
 
   void set_launched() { m_was_launched = true; }
 
- private:
   trace_config *m_tconfig;
   const std::unordered_map<std::string, OpcodeChar> *OpcodeMap;
-  trace_parser *m_parser;
   kernel_trace_t *m_kernel_trace_info;
+ private:
+  trace_parser *m_parser;
   bool m_was_launched;
 
   friend class trace_shd_warp_t;
@@ -147,13 +156,47 @@ class trace_config {
   void reg_options(option_parser_t opp);
   char *get_traces_filename() { return g_traces_filename; }
 
-  // MICRO 2025 port: getters used by warp_inst_t::assign_predicate_latencies_if_needed.
-  unsigned get_int_latency() const { return int_latency; }
-  unsigned get_int_init() const { return int_init; }
+  bool get_is_extra_traces_enabled(){ return is_extra_traces_enabled; } // MOD. Improved tracer
+
+  unsigned int get_int_latency() const { return int_latency; }
+  unsigned int get_fp_latency() const { return fp_latency; }
+  unsigned int get_dp_latency() const { return dp_latency; }
+  unsigned int get_sfu_latency() const { return sfu_latency; }
+  unsigned int get_tensor_latency() const { return tensor_latency; }
+  unsigned int get_int_init() const { return int_init; }
+  unsigned int get_fp_init() const { return fp_init; }
+  unsigned int get_dp_init() const { return dp_init; }
+  unsigned int get_sfu_init() const { return sfu_init; }
+  unsigned int get_tensor_init() const { return tensor_init; }
+  unsigned int get_branch_latency() const { return branch_latency; }
+  unsigned int get_branch_init() const { return branch_init; }
+  unsigned int get_half_latency() const { return half_latency; }
+  unsigned int get_half_init() const { return half_init; }
+  unsigned int get_uniform_latency() const { return uniform_latency; }
+  unsigned int get_uniform_init() const { return uniform_init; }
+  unsigned int get_predicate_latency() const { return predicate_latency; }
+  unsigned int get_predicate_init() const { return predicate_init; }
+  unsigned int get_miscellaneous_queue_latency() const {
+    return miscellaneous_queue_latency;
+  }
+  unsigned int get_miscellaneous_queue_init() const {
+    return miscellaneous_queue_init;
+  }
+  unsigned int get_miscellaneous_no_queue_latency() const {
+    return miscellaneous_no_queue_latency;
+  }
+  unsigned int get_miscellaneous_no_queue_init() const {
+    return miscellaneous_no_queue_init;
+  }
 
  private:
   unsigned int_latency, fp_latency, dp_latency, sfu_latency, tensor_latency;
   unsigned int_init, fp_init, dp_init, sfu_init, tensor_init;
+  unsigned int branch_latency, branch_init, half_latency, half_init,
+      uniform_latency, uniform_init, predicate_latency, predicate_init,
+      miscellaneous_queue_latency, miscellaneous_queue_init,
+      miscellaneous_no_queue_latency,
+      miscellaneous_no_queue_init;
   unsigned specialized_unit_latency[SPECIALIZED_UNIT_NUM];
   unsigned specialized_unit_initiation[SPECIALIZED_UNIT_NUM];
 
@@ -163,32 +206,47 @@ class trace_config {
   char *trace_opcode_latency_initiation_dp;
   char *trace_opcode_latency_initiation_sfu;
   char *trace_opcode_latency_initiation_tensor;
+  char *trace_opcode_latency_initiation_branch;
+  char *trace_opcode_latency_initiation_half;
+  char *trace_opcode_latency_initiation_uniform;
+  char *trace_opcode_latency_initiation_predicate;
+  char *trace_opcode_latency_initiation_miscellaneous_queue;
+  char *trace_opcode_latency_initiation_miscellaneous_no_queue;
   char *trace_opcode_latency_initiation_specialized_op[SPECIALIZED_UNIT_NUM];
+
+  bool is_extra_traces_enabled; // MOD. Improved tracer
+
 };
 
 class trace_shd_warp_t : public shd_warp_t {
  public:
-  trace_shd_warp_t(class shader_core_ctx *shader, unsigned warp_size)
-      : shd_warp_t(shader, warp_size) {
-    trace_pc = 0;
-    m_kernel_info = NULL;
-  }
-  // MICRO 2025 port: SM (remodeling) passes shader_core_ctx_wrapper* + stats*
-  trace_shd_warp_t(class shader_core_ctx_wrapper *shader, unsigned warp_size,
-                   class shader_core_stats *stats)
+  // Stage 1d.4+5 adaptation: our fork has two parallel class hierarchies —
+  // `shader_core_ctx : core_t` (vanilla / trace-driven) and
+  // `SM : shader_core_ctx_wrapper` (remodeling).  Provide both ctor overloads
+  // so trace_shd_warp_t can be spawned from either `trace_shader_core_ctx`
+  // (shader_core_ctx-derived, via trace_simt_core_cluster) or `SM`
+  // (wrapper-derived, via remodeling/sm.cc::create_shd_warp).  MICRO 2025
+  // originally only had the wrapper ctor since their shader_core_ctx is
+  // itself wrapper-derived.
+  trace_shd_warp_t(class shader_core_ctx *shader, unsigned warp_size, shader_core_stats *stats)
       : shd_warp_t(shader, warp_size, stats) {
-    trace_pc = 0;
     m_kernel_info = NULL;
+    used_insts = 0;
+  }
+  trace_shd_warp_t(class shader_core_ctx_wrapper *shader, unsigned warp_size, shader_core_stats *stats)
+      : shd_warp_t(shader, warp_size, stats) {
+    m_kernel_info = NULL;
+    used_insts = 0;
   }
 
-  std::vector<inst_trace_t> warp_traces;
-  const trace_warp_inst_t *get_next_trace_inst();
-  // MICRO 2025 port: 1-arg overload called by remodeling ibuffer; Stage 1 stub
-  // forwards to the 0-arg form (PC-filter is a Stage 1d tracer feature).
-  // Returns non-const trace_warp_inst_t* to match MICRO 2025 callsite expectation.
-  trace_warp_inst_t *get_next_trace_inst(address_type /*pc_filter*/) {
-    return const_cast<trace_warp_inst_t *>(get_next_trace_inst());
-  }
+  ~trace_shd_warp_t() {}
+
+  std::map<address_type, traced_instructions_by_pc> map_warp_traces;
+  std::vector<address_type> traced_pcs;
+  unsigned int used_insts;
+  trace_warp_inst_t *get_next_trace_inst(address_type pc); // MOD. VPREG
+  void decrement_trace_pc(); // MOD. VPREG
+  void decrease_num_used_inst(address_type pc);
   void clear();
   bool trace_done();
   address_type get_start_trace_pc();
@@ -198,19 +256,7 @@ class trace_shd_warp_t : public shd_warp_t {
     m_kernel_info = kernel_info;
   }
 
-  // MICRO 2025 port: IBuffer_Remodeled calls decrease_num_used_inst(pc) when
-  // an entry leaves the buffer.  v2 doesn't track this reuse-count (the
-  // trace is streamed warp-at-a-time from a file), so the call is a no-op.
-  void decrease_num_used_inst(address_type /*pc*/) {}
-
-  // MICRO 2025 port: per-pc instruction map exposed publicly in their
-  // trace_shd_warp_t.  Stage 1 stub: empty maps — vanilla path never uses
-  // them; remodeling path doesn't reach this point either.
-  std::vector<address_type> traced_pcs;
-  std::map<address_type, traced_instructions_by_pc> map_warp_traces;
-
  private:
-  unsigned trace_pc;
   trace_kernel_info_t *m_kernel_info;
 };
 
@@ -266,8 +312,9 @@ class trace_shader_core_ctx : public shader_core_ctx {
                                    unsigned hw_cta_id, unsigned hw_warp_id,
                                    gpgpu_t *gpu);
   virtual void create_shd_warp();
-  virtual const warp_inst_t *get_next_inst(unsigned warp_id, address_type pc);
-  virtual void updateSIMTStack(unsigned warpId, warp_inst_t *inst);
+  virtual warp_inst_t *get_next_inst(unsigned warp_id, address_type pc); // MOD. VPREG
+  virtual void decrement_trace_pc(unsigned warp_id); // MOD. VPREG
+  virtual void updateSIMTStack(unsigned warpId, warp_inst_t *inst, ib_ooo_simt_info *ib_ooo_simt_status);
   virtual void get_pdom_stack_top_info(unsigned warp_id, const warp_inst_t *pI,
                                        unsigned *pc, unsigned *rpc);
   virtual const active_mask_t &get_active_mask(unsigned warp_id,
@@ -275,6 +322,8 @@ class trace_shader_core_ctx : public shader_core_ctx {
   virtual void issue_warp(register_set &warp, const warp_inst_t *pI,
                           const active_mask_t &active_mask, unsigned warp_id,
                           unsigned sch_id);
+  virtual RRS* get_loog_rrs() override { return nullptr; }
+  virtual bool get_is_loog_enabled() override { return m_config->is_loog_enabled; }
 
  private:
   void init_traces(unsigned start_warp, unsigned end_warp,
