@@ -731,27 +731,21 @@ void trace_gpgpu_sim::createSIMTCluster() {
 }
 
 void trace_simt_core_cluster::create_shader_core_ctx() {
+  // Stage 1e: restored MICRO 2025 trace_driven.cc:741-754 verbatim.  Now
+  // that shader_core_ctx multi-inherits shader_core_ctx_wrapper, both the
+  // vanilla trace_shader_core_ctx and the remodeling/SM class satisfy
+  // m_core's `shader_core_ctx_wrapper*` element type.
   m_core.resize(m_config->n_simt_cores_per_cluster);
   for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; i++) {
     unsigned sid = m_config->cid_to_sid(i, m_cluster_id);
-    // Stage 1d.4+5 adaptation: v2 fork has `shader_core_ctx : core_t` while
-    // MICRO 2025 made `shader_core_ctx : shader_core_ctx_wrapper`.  Because
-    // our SM class inherits `shader_core_ctx_wrapper` (not shader_core_ctx),
-    // we cannot assign `new SM(...)` into our `std::vector<shader_core_ctx*>`
-    // m_core without multiple-inheritance refactoring.  For now the
-    // trace-driven path always instantiates trace_shader_core_ctx
-    // regardless of is_SM_remodeling_enabled.  TODO(Stage 1e/2): merge the
-    // shader_core_ctx + shader_core_ctx_wrapper hierarchies so this branch
-    // can be restored verbatim from MICRO 2025.
-    if (m_config->is_SM_remodeling_enabled) {
-      fprintf(stderr,
-              "[Stage 1d.4+5] WARN: is_SM_remodeling_enabled=1 requested but "
-              "SM-class instantiation under trace-driven is deferred; "
-              "falling back to trace_shader_core_ctx.  (See TODO in "
-              "trace_driven.cc::create_shader_core_ctx.)\n");
-    }
-    m_core[i] = new trace_shader_core_ctx(m_gpu, this, sid, m_cluster_id,
+    if(m_config->is_SM_remodeling_enabled) {
+      m_core[i] = new SM(m_config->num_subcores_in_SM, m_gpu, this, sid, m_cluster_id,
                                           m_config, m_mem_config, m_stats);
+      m_core[i]->init();
+    }else {
+      m_core[i] = new trace_shader_core_ctx(m_gpu, this, sid, m_cluster_id,
+                                          m_config, m_mem_config, m_stats);
+    }
     m_core[i]->create_gpu_per_sm_stats(m_gpu->m_gpu_per_sm_stats);
     m_core_sim_order.push_back(i);
   }
