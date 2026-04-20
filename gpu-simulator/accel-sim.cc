@@ -23,6 +23,14 @@ accel_sim_framework::accel_sim_framework(std::string config_file,
       tconfig.get_is_extra_traces_enabled(),
       0u, UINT_MAX);
 
+  // Stage 1d.8: hydrate m_extra_trace_info from enhanced_execution_info.json
+  // (mirrors MICRO 2025 main.cc:99).  Needed before any kernel runs because
+  // trace_driven → traced_execution::get_kernel_by_unique_function_id() will
+  // assert on an empty map.
+  m_gpgpu_sim->parse_extra_trace_info(
+      tracer->get_extra_trace_info_filename(),
+      tconfig.get_is_extra_traces_enabled());
+
   tconfig.parse_config();
 
   init();
@@ -41,6 +49,11 @@ accel_sim_framework::accel_sim_framework(int argc, const char **argv) {
       tconfig.get_traces_filename(),
       tconfig.get_is_extra_traces_enabled(),
       0u, UINT_MAX);
+
+  // Stage 1d.8: hydrate m_extra_trace_info from static JSON.
+  m_gpgpu_sim->parse_extra_trace_info(
+      tracer->get_extra_trace_info_filename(),
+      tconfig.get_is_extra_traces_enabled());
 
   tconfig.parse_config();
 
