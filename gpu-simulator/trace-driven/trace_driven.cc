@@ -105,8 +105,10 @@ void advance_trace_cta_id(kernel_trace_t *kernel_trace_info) {
 
 trace_warp_inst_t *trace_shd_warp_t::get_next_trace_inst(address_type pc) {
   if (used_insts < traced_pcs.size()) {
+    // Stage 1f P0-A.3: SM-remodeling path has m_shader=nullptr; use helper
+    // that consults m_shader_wrapper too.
     trace_warp_inst_t *new_inst =
-        new trace_warp_inst_t(get_shader()->get_config());
+        new trace_warp_inst_t(get_shader_config());
     auto it_inst_trace = map_warp_traces.find(pc);
     inst_trace_t *trace_ptr;
     bool is_pc_found = true;
@@ -117,7 +119,7 @@ trace_warp_inst_t *trace_shd_warp_t::get_next_trace_inst(address_type pc) {
       trace_ptr = new inst_trace_t(pc, get_current_unique_function_id_call(), is_pc_found);
     }
     inst_trace_t &trace = *trace_ptr;
-    traced_execution& trc_exec = get_shader()->get_gpu()->get_extra_trace_info();
+    traced_execution& trc_exec = get_shader_gpu()->get_extra_trace_info();
     new_inst->parse_from_trace_struct(
         trace, m_kernel_info->OpcodeMap,
         m_kernel_info->m_tconfig, m_kernel_info->m_kernel_trace_info, trc_exec);
