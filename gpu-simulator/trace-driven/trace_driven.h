@@ -222,17 +222,8 @@ class trace_shd_warp_t : public shd_warp_t {
  public:
   // Stage 1d.4+5 adaptation: our fork has two parallel class hierarchies —
   // `shader_core_ctx : core_t` (vanilla / trace-driven) and
-  // `SM : shader_core_ctx_wrapper` (remodeling).  Provide both ctor overloads
-  // so trace_shd_warp_t can be spawned from either `trace_shader_core_ctx`
-  // (shader_core_ctx-derived, via trace_simt_core_cluster) or `SM`
-  // (wrapper-derived, via remodeling/sm.cc::create_shd_warp).  MICRO 2025
-  // originally only had the wrapper ctor since their shader_core_ctx is
-  // itself wrapper-derived.
-  trace_shd_warp_t(class shader_core_ctx *shader, unsigned warp_size, shader_core_stats *stats)
-      : shd_warp_t(shader, warp_size, stats) {
-    m_kernel_info = NULL;
-    used_insts = 0;
-  }
+  // Stage 1g G1: single wrapper ctor (vanilla shader_core_ctx is also a
+  // wrapper subclass so both paths funnel through here).
   trace_shd_warp_t(class shader_core_ctx_wrapper *shader, unsigned warp_size, shader_core_stats *stats)
       : shd_warp_t(shader, warp_size, stats) {
     m_kernel_info = NULL;
