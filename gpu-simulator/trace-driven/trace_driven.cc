@@ -105,8 +105,6 @@ void advance_trace_cta_id(kernel_trace_t *kernel_trace_info) {
 
 trace_warp_inst_t *trace_shd_warp_t::get_next_trace_inst(address_type pc) {
   if (used_insts < traced_pcs.size()) {
-    // Stage 1g G1: get_shader() returns shader_core_ctx_wrapper*, virtual
-    // dispatch goes to vanilla shader_core_ctx or remodeling SM as needed.
     trace_warp_inst_t *new_inst =
         new trace_warp_inst_t(get_shader()->get_config());
     auto it_inst_trace = map_warp_traces.find(pc);
@@ -259,11 +257,13 @@ bool trace_warp_inst_t::parse_from_trace_struct(
       16;  // starting from MAXWELL isize=16 bytes (including the control bytes)
   for (unsigned i = 0; i < MAX_OUTPUT_VALUES; i++) {
     out[i] = 0;
-    // vpreg_* lines removed (OoO GPU, not ported).  See Stage 1d.4+5 doc.
+    vpreg_virtual_out[i] = 0; // MOD. VPREG
+    vpreg_physical_out[i] = 0; // MOD. VPREG
   }
   for (unsigned i = 0; i < MAX_INPUT_VALUES; i++) {
     in[i] = 0;
-    // vpreg_* lines removed (OoO GPU, not ported).
+    vpreg_virtual_in[i] = 0; // MOD. VPREG
+    vpreg_physical_in[i] = 0; // MOD. VPREG
   }
 
   is_vectorin = 0;
@@ -278,7 +278,12 @@ bool trace_warp_inst_t::parse_from_trace_struct(
   const_cache_operand = 0;
   oprnd_type = UN_OP;
 
-  // vpreg_{virtual,physical}_ar{1,2} init removed — OoO GPU not ported.
+  // MOD. Begin. VPREG
+  vpreg_virtual_ar1 = 0;
+  vpreg_virtual_ar2 = 0;
+  vpreg_physical_ar1 = 0;
+  vpreg_physical_ar2 = 0;
+  // MOD. End. VPREG
 
 
   // get the opcode
@@ -733,10 +738,6 @@ void trace_gpgpu_sim::createSIMTCluster() {
 }
 
 void trace_simt_core_cluster::create_shader_core_ctx() {
-  // Stage 1e: restored MICRO 2025 trace_driven.cc:741-754 verbatim.  Now
-  // that shader_core_ctx multi-inherits shader_core_ctx_wrapper, both the
-  // vanilla trace_shader_core_ctx and the remodeling/SM class satisfy
-  // m_core's `shader_core_ctx_wrapper*` element type.
   m_core.resize(m_config->n_simt_cores_per_cluster);
   for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; i++) {
     unsigned sid = m_config->cid_to_sid(i, m_cluster_id);

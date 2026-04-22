@@ -220,10 +220,6 @@ class trace_config {
 
 class trace_shd_warp_t : public shd_warp_t {
  public:
-  // Stage 1d.4+5 adaptation: our fork has two parallel class hierarchies —
-  // `shader_core_ctx : core_t` (vanilla / trace-driven) and
-  // Stage 1g G1: single wrapper ctor (vanilla shader_core_ctx is also a
-  // wrapper subclass so both paths funnel through here).
   trace_shd_warp_t(class shader_core_ctx_wrapper *shader, unsigned warp_size, shader_core_stats *stats)
       : shd_warp_t(shader, warp_size, stats) {
     m_kernel_info = NULL;
