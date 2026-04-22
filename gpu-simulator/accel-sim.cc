@@ -169,7 +169,8 @@ void accel_sim_framework::cleanup(unsigned finished_kernel) {
     }
   }
   assert(k);
-  m_gpgpu_sim->print_stats(finished_kernel_cuda_stream_id);
+  (void)finished_kernel_cuda_stream_id;  // streamID dropped in Stage 1h pivot
+  m_gpgpu_sim->print_stats();
 }
 
 unsigned accel_sim_framework::simulate() {
