@@ -241,6 +241,7 @@ gpgpu_sim *accel_sim_framework::gpgpu_trace_sim_init_perf_model(
   m_gpgpu_context->the_gpgpusim->g_the_gpu_config->reg_options(
       opp);  // register GPU microrachitecture options
   m_config->reg_options(opp);
+  m_gpgpu_context->the_gpgpusim->g_trace_config = m_config;
 
   option_parser_cmdline(opp, argc, argv);  // parse configuration options
   fprintf(stdout, "GPGPU-Sim: Configuration options:\n\n");
@@ -250,6 +251,8 @@ gpgpu_sim *accel_sim_framework::gpgpu_trace_sim_init_perf_model(
   // system environment variables
   assert(setlocale(LC_NUMERIC, "C"));
   m_gpgpu_context->the_gpgpusim->g_the_gpu_config->init();
+
+  m_gpgpu_context->the_gpgpusim->g_the_gpu_config->set_custom_options(true);  // MOD. General parse options
 
   m_gpgpu_context->the_gpgpusim->g_the_gpu = new trace_gpgpu_sim(
       *(m_gpgpu_context->the_gpgpusim->g_the_gpu_config), m_gpgpu_context);
