@@ -3,6 +3,9 @@
 
 #include "accel-sim.h"
 
+#include <cstdlib>
+#include <omp.h>
+
 /* TO DO:
  * NOTE: the current version of trace-driven is functionally working fine,
  * but we still need to improve traces compression and simulation speed.
@@ -26,6 +29,16 @@
  */
 
 int main(int argc, const char **argv) {
+  // Default to 1 OpenMP thread unless user set OMP_NUM_THREADS explicitly.
+  // Rationale: on large-core hosts (e.g. 112-core NUMA server), OpenMP
+  // defaults to nproc threads and per-cycle barrier contention can stall
+  // the simulator for hours (observed 4 CTA/sec on 112-thread default vs
+  // ~100+ CTA/sec on 1 thread).  Users who want parallelism set
+  // OMP_NUM_THREADS=<N> in the environment and the explicit value wins.
+  if (std::getenv("OMP_NUM_THREADS") == nullptr) {
+    omp_set_num_threads(1);
+  }
+
   accel_sim_framework accel_sim(argc, argv);
   accel_sim.simulation_loop();
 
