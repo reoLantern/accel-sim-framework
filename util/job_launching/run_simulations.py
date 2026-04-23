@@ -345,7 +345,7 @@ class ConfigurationSpec:
             else:
                 txt_args = str(command_line_args)
         else:
-            txt_args = " -config ./gpgpusim.config -trace ./traces/kernelslist.g"
+            txt_args = " -config ./gpgpusim.config -trace ./traces/dynamic_trace.pb"
 
         if os.getenv("TORQUE_QUEUE_NAME") == None:
             queue_name = "batch"
