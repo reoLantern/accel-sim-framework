@@ -153,9 +153,8 @@ for bench in benchmarks:
             else:
                 sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE=""\n')
 
-        # first we generate the traces (.trace and kernelslist files)
-        # then, we do post-processing for the traces and generate (.traceg and kernelslist.g files)
-        # then, we delete the intermediate files ((.trace and kernelslist files files)
+        # MICRO 2025 tracer_tool.so writes traces/dynamic_trace.pb directly;
+        # no .trace/kernelslist intermediate files, no post-processing step.
         sh_contents += (
             '\nexport CUDA_VERSION="'
             + cuda_version
@@ -163,7 +162,7 @@ for bench in benchmarks:
             + options.device_num
             + '" ; '
         )
-        
+
         tracer_contents = (
             sh_contents
             + "\nrm -f traces/*"
@@ -175,19 +174,6 @@ for bench in benchmarks:
             + exec_path
             + " "
             + str(args)
-            + " ; "
-            + os.path.join(
-                nvbit_tracer_path, "traces-processing", "post-traces-processing"
-            )
-            + " "
-            + this_trace_folder
-            + " ; rm -f "
-            + this_trace_folder
-            + "/*.trace ; rm -f "
-            + this_trace_folder
-            + "/*.trace.xz ; rm -f "
-            + this_trace_folder
-            + "/kernelslist "
         )
         
         # Spinlock tool run script
