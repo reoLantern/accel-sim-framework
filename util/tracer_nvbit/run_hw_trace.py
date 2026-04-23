@@ -128,7 +128,11 @@ for bench in benchmarks:
 
         if args == None:
             args = ""
-        exec_path = common.file_option_test(os.path.join(edir, exe), "", this_directory)
+        try:
+            exec_path = common.file_option_test(os.path.join(edir, exe), "", this_directory)
+        except common.PathMissing:
+            print(f'[SKIP] {exe}: binary not found, skipping')
+            continue
         sh_contents = "set -e\n"
 
         if options.terminate_upon_limit:
@@ -139,13 +143,13 @@ for bench in benchmarks:
             sh_contents += "export TERMINATE_UPON_LIMIT=0; "
             exec_path = ". " + exec_path
 
-            if options.kernel_number > 0:
-                sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE="0-'+str(options.kernel_number)+'"\n')
+            if int(options.kernel_number) > 0:
+                sh_contents +=  ('\nexport DYNAMIC_KERNEL_LIMIT_END="'+str(int(options.kernel_number))+'"\nexport TERMINATE_UPON_LIMIT=1\n')
             else:
-                sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE="0-'+str(50)+'"\n')
+                sh_contents +=  ('\nexport DYNAMIC_KERNEL_LIMIT_END="'+str(50)+'"\nexport TERMINATE_UPON_LIMIT=1\n')
         else:
-            if options.kernel_number > 0:
-                sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE="0-'+str(options.kernel_number)+'"\n')
+            if int(options.kernel_number) > 0:
+                sh_contents +=  ('\nexport DYNAMIC_KERNEL_LIMIT_END="'+str(int(options.kernel_number))+'"\nexport TERMINATE_UPON_LIMIT=1\n')
             else:
                 sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE=""\n')
 
