@@ -9,6 +9,39 @@ export PATH=$CUDA_INSTALL_PATH/bin:$PATH
 make -C ./util/tracer_nvbit/
 ```
 
+Benchmark 构建（gpu-app-collection）：
+
+```bash
+# 依赖：setup_environment 已识别 CUDA_INSTALL_PATH
+cd ./gpu-app-collection/src && source setup_environment
+
+# 一次构建所有 suite（rodinia-2.0-ft/rodinia-3.1/ispass-2009/lonestargpu/pannotia/polybench/
+# proxy-apps/GPU_Microbenchmark/custom_apps/...）
+make all -j8
+# binary 落在：./gpu-app-collection/bin/$CUDA_VERSION/release/
+
+# 注意：make <single_suite> 可能会顺手清掉 bin/<cuda>/release 里其它 suite 的产物
+#       （根因未定位，2026-04-23 观察到 make rodinia_2.0-ft 后 rodinia-3.1 等 binary 消失）
+#       → 改动某个 suite 后若发现别的丢了，直接重新 make all
+
+# 首次运行前下载 benchmark 输入数据（~2.5GB 压缩包）
+cd ./gpu-app-collection && bash get_data.sh
+# 覆盖 rodinia / ispass-2009 / lonestargpu / sdk；polybench 规模用源码宏，其它 suite 需另觅
+```
+
+HW trace（在真卡上跑）：
+
+```bash
+# -l 5 限制每 app 前 5 个 kernel；-t 开启 TERMINATE_UPON_LIMIT
+./util/tracer_nvbit/run_hw_trace.py -B <suite> -D 0 -l 5 -t
+# 输出：./hw_run/traces/device-0/$CUDA_VERSION/<exec>/<argdir>/traces/dynamic_trace.pb
+
+# 大 kernel 应用可能在单 kernel 就 timeout（NVBit overhead 10-20×）
+# 建议独立对每个 run.sh 套 timeout，先 120s 再按需 600s 重试
+# 失败排查：per-app spinlock 检测
+bash <run_dir>/run_spinlock_detection.sh   # spinlock_detection/spinlock_instructions.txt
+```
+
 Accel-Sim Simulator:
 
 ```bash
