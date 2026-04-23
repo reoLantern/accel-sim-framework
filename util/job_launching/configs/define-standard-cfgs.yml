@@ -23,6 +23,10 @@ RTX2060:
 RTX2060_S:
     base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM75_RTX2060_S/gpgpusim.config"
 
+#Turing
+RTX2070_S:
+    base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM75_RTX2070_S/gpgpusim.config"
+
 # Volta
 TITANV:
     base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM7_TITANV/gpgpusim.config"
