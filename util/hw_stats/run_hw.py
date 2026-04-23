@@ -188,7 +188,11 @@ for bench in benchmarks:
         if args == None:
             args = ""
 
-        exec_path = common.file_option_test(os.path.join(edir, exe), "", this_directory)
+        try:
+            exec_path = common.file_option_test(os.path.join(edir, exe), "", this_directory)
+        except common.PathMissing:
+            print(f'[SKIP] {exe}: binary not found, skipping')
+            continue
         sh_contents = ""
         kernel_number = ""
         if "mlperf" in exec_path:
