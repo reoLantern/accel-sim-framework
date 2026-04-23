@@ -42,6 +42,52 @@ HW trace（在真卡上跑）：
 bash <run_dir>/run_spinlock_detection.sh   # spinlock_detection/spinlock_instructions.txt
 ```
 
+HW truth（真卡 ncu 性能计数）：
+
+```bash
+# 跑 trace 后 GPU 空闲时再跑（两者不能同时，NVBit 干扰 ncu 数值）
+./util/hw_stats/run_hw.py -B <suite1,suite2,...> -D 0 -l 5
+# 输出每 app：ncu_stats.ncu-rep（~60 metrics：cycles/L1/L2/DRAM/inst_mix/occupancy）
+# 路径：./hw_run/device-0/$CUDA_VERSION/<exec>/<argdir>/ncu_stats.ncu-rep
+
+# 提取 CSV
+ncu --import <path>/ncu_stats.ncu-rep --csv --page raw > metrics.csv
+
+# 关键 metrics for cycle MAPE: sm__cycles_elapsed.avg（总周期）
+# L1/L2 hit rate 等见 ncu --query-metrics | grep <keyword>
+```
+
+批量仿真（vanilla 管线）：
+
+```bash
+# 前置：rsync trace + ncu_stats 到 local 同路径（hw_run/traces/... + hw_run/device-0/...）
+# 前置：refresh ./gpu-simulator/bin/release/accel-sim.out （cmake --install build）
+
+source ./gpu-simulator/setup_environment.sh release
+./util/job_launching/run_simulations.py \
+  -T $PWD/hw_run/traces/device-0/$CUDA_VERSION/ \
+  -C RTX2070_S-SASS \
+  -B rodinia_2.0-ft,rodinia-3.1,ispass-2009,pannotia,polybench \
+  -N <run_name> -l local -c 20    # procman 本地 20 并发
+# 输出：./sim_run_$CUDA_VERSION/<app>/<argdir>/RTX2070_S-SASS/*.o* （stdout）
+```
+
+Stats + MAPE：
+
+```bash
+# 1. 提取 sim per-kernel / app stats
+./util/job_launching/get_stats.py -R -k -K \
+  -B <suites> -C RTX2070_S-SASS > runs/stats.csv
+
+# 2. 官方 correlator（需要 sim output 包含 Total_core_cache_stats 等 vanilla stat）
+./util/plotting/plot-correlation.py \
+  -c runs/stats.csv -H $PWD/hw_run/device-0/$CUDA_VERSION/
+# 若 sim 缺某 stat：KeyError，需要 DIY
+
+# 3. DIY cycle MAPE（sim gpu_tot_sim_cycle vs HW sm__cycles_elapsed.avg）
+#   参考 runs/mape_v1/compute_mape.py
+```
+
 Accel-Sim Simulator:
 
 ```bash
