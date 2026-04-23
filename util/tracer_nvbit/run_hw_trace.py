@@ -165,7 +165,7 @@ for bench in benchmarks:
 
         tracer_contents = (
             sh_contents
-            + "\nrm -f traces/*"
+            + "\nrm -rf traces/*"
             + "\nexport TRACES_FOLDER="
             + this_run_dir
             + f"; ENABLE_SPINLOCK_FAST_FORWARD={1 if options.spinlock_handling == 'fast_forward' else 0} SPINLOCK_ITER_TO_KEEP={options.spinlock_fast_forward_iterations} CUDA_INJECTION64_PATH="
