@@ -336,8 +336,18 @@ void traced_instruction::validate_reuse_bits_crosscheck() const {
     // empty; skip silently.
     if (m_encoded_instruction.size() != 2) return;
 
-    // Extract the 3 reuse bits (original inst bits[122:124], = bits[17:19] of
-    // enc[1] >> CCPos_arch_7x_8x).
+    // Extract bit fields from instruction bits[127:64] (encoded in enc[1]).
+    // After `>> CCPos_arch_7x_8x` (=41), the result starts at original bit 105
+    // — i.e. bit i of `shifted` == bit 105+i of the full instruction.
+    //
+    // Bit map (Volta-class opex):
+    //   shifted bit 4 ≡ inst bit 109 = END_GROUP flag (1 = trans/no-EG, 0 = EG)
+    //   shifted bits [17:19] ≡ inst bits [122:124] = high 3 bits of opex
+    //
+    // Per DocumentSASS opex LUT semantics (TABLES_opex_N):
+    //   END_GROUP mode (bit 109 == 0 → is_yield == true): high 3 bits = batch_t.
+    //                  No reuse possible; .reuse is forbidden by SIDL spec.
+    //   Trans/W mode  (bit 109 == 1 → is_yield == false): high 3 bits = reuse_src_a/b/c.
     unsigned long long enc1 = 0;
     try {
         enc1 = std::stoull(m_encoded_instruction[1], nullptr, 16);
@@ -345,8 +355,9 @@ void traced_instruction::validate_reuse_bits_crosscheck() const {
         return;  // malformed hex — skip silently
     }
     unsigned long long shifted = enc1 >> CCPos_arch_7x_8x;
-    unsigned reuse_bits = static_cast<unsigned>((shifted >> 17) & 0x7);
-    int count_from_bits = __builtin_popcount(reuse_bits);
+    bool is_trans_mode = ((shifted >> 4) & 0x1) == 1;  // !END_GROUP
+    unsigned high3 = static_cast<unsigned>((shifted >> 17) & 0x7);
+    int count_from_bits = is_trans_mode ? __builtin_popcount(high3) : 0;
 
     // Count operands that text-parsed a `.reuse` modifier.
     int count_from_text = 0;
@@ -360,10 +371,11 @@ void traced_instruction::validate_reuse_bits_crosscheck() const {
     if (count_from_bits != count_from_text) {
         fprintf(stderr,
                 "[reuse-crosscheck] WARN pc=%s op=%s text_count=%d bits_count=%d "
-                "reuse_bits=0b%u%u%u (trusting text)\n",
+                "high3=0b%u%u%u mode=%s (trusting text)\n",
                 m_pc_string.c_str(), m_op_code.c_str(),
                 count_from_text, count_from_bits,
-                (reuse_bits >> 2) & 1, (reuse_bits >> 1) & 1, reuse_bits & 1);
+                (high3 >> 2) & 1, (high3 >> 1) & 1, high3 & 1,
+                is_trans_mode ? "trans" : "EG");
     }
 }
 
