@@ -741,14 +741,9 @@ void trace_simt_core_cluster::create_shader_core_ctx() {
   m_core.resize(m_config->n_simt_cores_per_cluster);
   for (unsigned i = 0; i < m_config->n_simt_cores_per_cluster; i++) {
     unsigned sid = m_config->cid_to_sid(i, m_cluster_id);
-    if(m_config->is_SM_remodeling_enabled) {
-      m_core[i] = new SM(m_config->num_subcores_in_SM, m_gpu, this, sid, m_cluster_id,
-                                          m_config, m_mem_config, m_stats);
-      m_core[i]->init();
-    }else {
-      m_core[i] = new trace_shader_core_ctx(m_gpu, this, sid, m_cluster_id,
-                                          m_config, m_mem_config, m_stats);
-    }
+    m_core[i] = new SM(m_config->num_subcores_in_SM, m_gpu, this, sid, m_cluster_id,
+                       m_config, m_mem_config, m_stats);
+    m_core[i]->init();
     m_core[i]->create_gpu_per_sm_stats(m_gpu->m_gpu_per_sm_stats);
     m_core_sim_order.push_back(i);
   }
