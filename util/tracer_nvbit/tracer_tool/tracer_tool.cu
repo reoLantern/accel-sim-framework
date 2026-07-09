@@ -169,6 +169,7 @@ int dynamic_kernel_limit_end = 0; // 0 means no limit
 enum address_format { list_all = 0, base_stride = 1, base_delta = 2 };
 
 int binary_version;
+int max_binary_version = 0;  // max valid BINARY_VERSION across launches; used at post-proc (robust vs stray-0 runtime/library kernels)
 std::vector<int> kernel_id;
 std::vector<int> current_stream_id;
 
@@ -1077,6 +1078,7 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
           p->f, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES);
       binary_version = get_attr_with_kernel_fallback(
           p->f, CU_FUNC_ATTRIBUTE_BINARY_VERSION);
+      if (binary_version > max_binary_version) max_binary_version = binary_version;
 
       get_opcode_map(OpcodeMap, binary_version);
       instrument_function_if_needed(ctx, p->f, device_id);
@@ -1493,7 +1495,12 @@ void enhanced_tracer() {
   std::string program_path = get_program_path();
   std::size_t found = program_path.find_last_of("/");
   std::string program_name = program_path.substr(found + 1);
-  std::string command_get_cubin = "cd " + cubin_path + " && cuobjdump " + program_path + " -xelf all -arch=sm_" + std::to_string(binary_version);
+  // Some kernels (runtime/library) report CU_FUNC_ATTRIBUTE_BINARY_VERSION as 0, and the global
+  // binary_version holds only the last launch's value; if that is 0, cuobjdump -arch=sm_0 aborts and
+  // drops the whole app's enhanced trace (observed intermittently: the failing app set changed run to
+  // run). Use the max valid arch seen across launches instead.
+  int cubin_sm = (max_binary_version > 0) ? max_binary_version : binary_version;
+  std::string command_get_cubin = "cd " + cubin_path + " && cuobjdump " + program_path + " -xelf all -arch=sm_" + std::to_string(cubin_sm);
   std::cout << "Generating extra information for the enhanced traces of benchmark: " << program_name << std::endl;
   check_system_call(system(command_get_cubin.c_str()), command_get_cubin.c_str());
   m_enhanced_traced_execution = new traced_execution(program_name);
