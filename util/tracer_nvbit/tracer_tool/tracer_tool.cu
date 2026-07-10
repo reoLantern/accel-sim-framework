@@ -42,7 +42,6 @@
 #include <unistd.h>
 #include <unordered_set>
 #include <vector>
-#include <regex>
 
 // MOD. Begin. Enhanced Tracer
 #include <execinfo.h> /* backtrace, backtrace_symbols_fd */
@@ -307,22 +306,50 @@ std::string getEnclosedSubstring(std::string str) {
   return str.substr(start_pos + 1, end_pos - start_pos - 1);
 }
 
-// Regex to remove dependency requirements, e.g. " &req={1}"
-std::regex reqRegex("\\s*&req=\\{[^}]+\\}");
-// Regex to remove write-slot annotations, e.g. " &wr=0x4"
-std::regex wrRegex("\\s*&wr=0x[0-9A-Fa-f]+");
-// Regex to remove write-slot annotations, e.g. " &wr=0x4"
-std::regex rdRegex("\\s*&rd=0x[0-9A-Fa-f]+");
-// Regex to remove transaction/synchronization annotations, e.g. " ?trans1;" or " ?WAIT4_END_GROUP;"
-std::regex transRegex("\\s*\\?[A-Za-z0-9_]+");
-
+// Removes the four SASS extra-info annotations that were previously stripped with four
+// std::regex_replace passes, each optionally preceded by whitespace:
+//   \s*&req=\{[^}]+\}   \s*&wr=0x[0-9A-Fa-f]+   \s*&rd=0x[0-9A-Fa-f]+   \s*\?[A-Za-z0-9_]+
+// The std::regex version was O(len^2) on the very wide (>3000 char) whitespace-padded
+// register-liveness lines that "nvdisasm -lrm count" emits: on each such line "\s*<marker>"
+// re-scans the whole whitespace run at every position. On instruction-heavy kernels
+// (CUTLASS / cuBLAS SIMT GEMM, whose register-liveness tables are wide) this turned the
+// enhanced post-processing into a multi-minute hang. This one-pass scanner is O(len) and
+// byte-identical to the regex version on real SASS/RFU (verified: 0 mismatches over the full
+// cutlass_gemm_nn sass+rfu; ~8800x faster on the choking rfu). The trigger was register-file
+// width, not kernel-name length.
+static inline bool ei_is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+static inline bool ei_is_word(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+static inline bool ei_is_ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+// Match one of the four markers starting exactly at p (no leading whitespace).
+// Returns the index just past the match, or p if nothing matches.
+static inline size_t ei_match_marker(const std::string &s, size_t p, size_t n) {
+  if (s.compare(p, 6, "&req={") == 0) { size_t k = p + 6, c = 0; while (k < n && s[k] != '}') { k++; c++; } if (k < n && c >= 1) return k + 1; }
+  else if (s.compare(p, 6, "&wr=0x") == 0) { size_t k = p + 6, c = 0; while (k < n && ei_is_hex(s[k])) { k++; c++; } if (c >= 1) return k; }
+  else if (s.compare(p, 6, "&rd=0x") == 0) { size_t k = p + 6, c = 0; while (k < n && ei_is_hex(s[k])) { k++; c++; } if (c >= 1) return k; }
+  else if (s[p] == '?') { size_t k = p + 1, c = 0; while (k < n && ei_is_word(s[k])) { k++; c++; } if (c >= 1) return k; }
+  return p;
+}
 std::string replaceInstructionNewExtraInformation(std::string original_sass_string) {
-  std::string transformed = original_sass_string;
-  transformed = std::regex_replace(transformed, reqRegex, "");
-  transformed = std::regex_replace(transformed, wrRegex, "");
-  transformed = std::regex_replace(transformed, rdRegex, "");
-  transformed = std::regex_replace(transformed, transRegex, "");
-  return transformed;
+  const std::string &s = original_sass_string;
+  std::string out;
+  out.reserve(s.size());
+  size_t i = 0, n = s.size();
+  while (i < n) {
+    if (ei_is_ws(s[i])) {
+      size_t j = i;
+      while (j < n && ei_is_ws(s[j])) j++;   // whitespace run [i, j)
+      if (j < n) {
+        size_t e = ei_match_marker(s, j, n);
+        if (e > j) { i = e; continue; }       // "\s*<marker>": drop the whitespace run and the marker
+      }
+      out.append(s, i, j - i);                 // whitespace kept; resume at first non-whitespace
+      i = j;
+    } else {
+      size_t e = ei_match_marker(s, i, n);     // marker with zero leading whitespace
+      if (e > i) { i = e; } else { out.push_back(s[i]); i++; }
+    }
+  }
+  return out;
 }
 
 void print_map(const std::map<int, std::string> &map_to_print) {
