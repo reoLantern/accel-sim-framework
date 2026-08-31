@@ -9,11 +9,13 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <algorithm> // for std::minmax_element
 #include <bitset>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -32,7 +34,14 @@
 /* contains definition of the inst_trace_t structure */
 #include "common.h"
 
+/* contains definition of the WarpsyncCollectiveWatchdog structure */
+#include "watchdog.h"
+
+/* for general utils functions */
+#include "utils.h"
+
 #define TRACER_VERSION "5"
+#define TRACER_VERSION_ALLOW_REG_VAL "6"
 
 static int get_attr_with_kernel_fallback(CUfunction func,
                                          CUfunction_attribute attr) {
@@ -52,6 +61,14 @@ static int get_attr_with_kernel_fallback(CUfunction func,
 static __managed__ ChannelDev channel_dev;
 static ChannelHost channel_host;
 
+/*
+ * Instance of the WarpsyncCollectiveWatchdog,
+ * to be initialized in nvbit_at_init. This is a temporary solution and should
+ * be removed once NVBit fixes the bug with warpsync.collective.
+ */
+std::unique_ptr<WatchdogInterface> warpsync_collective_watchdog{};
+bool enable_watchdog = true;
+
 /* receiving thread and its control variables */
 pthread_t recv_thread;
 volatile bool recv_thread_started = false;
@@ -70,6 +87,8 @@ int print_core_id = 0;
 int exclude_pred_off = 1;
 int active_from_start = 1;
 int lineinfo = 0;
+bool skip_tma_mem = false;
+bool allow_reg_val_tracing = true;
 /* used to select region of interest when active from start is 0 */
 bool active_region = true;
 
@@ -80,9 +99,32 @@ int user_defined_folders = 0;
 /* Use xz to compress the *.trace file */
 int xz_compress_trace = 0;
 
+// Debugging helper
+#define DPRINTF(fmt, ...)                                                      \
+  {                                                                            \
+    if (verbose > 0)                                                           \
+      printf(fmt, ##__VA_ARGS__);                                              \
+  }
+
 /* opcode to id map and reverse map  */
 std::map<std::string, int> opcode_to_id_map;
 std::map<int, std::string> id_to_opcode_map;
+
+/* Variable to control if NVBit instrumentation is enabled */
+bool nvbit_instrumentation_enabled = 1;
+const char *nvbit_instrumentation_tag = "DEFAULT";
+
+/* NVBit instrumentation control functions in C so interaction
+ * is easier with the tool*/
+extern "C" {
+void set_nvbit_instrumentation_tag(const char *tag) {
+  nvbit_instrumentation_tag = tag;
+}
+
+void enable_nvbit_instrumentation() { nvbit_instrumentation_enabled = true; }
+
+void disable_nvbit_instrumentation() { nvbit_instrumentation_enabled = false; }
+}
 
 std::string user_folder = getcwd(NULL, 0);
 std::string cwd = getcwd(NULL, 0);
@@ -111,8 +153,11 @@ void parse_kernel_ranges_from_env() {
   g_max_kernel_id = 0;
 
   const char *env_var = std::getenv("DYNAMIC_KERNEL_RANGE");
+  DPRINTF("DYNAMIC_KERNEL_RANGE environment variable: %s\n", env_var);
   if (!env_var || std::string(env_var).empty()) {
     g_kernel_ranges.push_back({0, 0, {std::regex(".*")}}); // 0 end = trace all
+    DPRINTF("No DYNAMIC_KERNEL_RANGE environment variable found, tracing all "
+            "kernels\n");
     return;
   }
   std::string input(env_var);
@@ -175,6 +220,8 @@ void parse_kernel_ranges_from_env() {
     }
 
     g_kernel_ranges.push_back({start, end, regexes});
+    DPRINTF("Added kernel range: %lu-%lu with regexes: %s\n", start, end,
+            regex_part.c_str());
     if (end > g_max_kernel_id) {
       g_max_kernel_id = end;
     }
@@ -205,7 +252,13 @@ bool should_trace_kernel(uint64_t kernel_id, const std::string &kernel_name) {
   return false;
 }
 
-enum address_format { list_all = 0, base_stride = 1, base_delta = 2 };
+enum address_format {
+  list_all = 0,
+  base_stride = 1,
+  base_delta = 2,
+  tma_list_all = 3,
+  tma_base_delta = 4
+};
 
 /* File pointers for the kernels, and stats files */
 static FILE *kernelsFile = NULL;
@@ -215,8 +268,11 @@ static bool first_call = true;
 unsigned old_total_insts = 0;
 unsigned old_total_reported_insts = 0;
 
-/* Spinlock fast forward control */
-int enable_spinlock_fast_forward = 0;
+/* Spinlock handling mode: 0=none, 1=fast_forward, 2=mark_region */
+const int SPINLOCK_MODE_NONE = 0;
+const int SPINLOCK_MODE_FAST_FORWARD = 1;
+const int SPINLOCK_MODE_MARK_REGION = 2;
+int spinlock_handling_mode = 0;
 int spinlock_iter_to_keep = 0;
 // Map from kernel name to spinlock instruction indices
 std::map<std::string, std::vector<uint32_t> *> spinlock_instr_map;
@@ -264,10 +320,22 @@ void nvbit_at_init() {
   GET_VAR_INT(xz_compress_trace, "TRACE_FILE_COMPRESS", 1,
               "Create xz-compressed trace"
               "file");
-  GET_VAR_INT(enable_spinlock_fast_forward, "ENABLE_SPINLOCK_FAST_FORWARD", 0,
-              "Enable spinlock fast forwarding");
+  GET_VAR_INT(spinlock_handling_mode, "SPINLOCK_HANDLING_MODE", 0,
+              "Spinlock handling mode: 0=none, 1=fast_forward, 2=mark_region");
   GET_VAR_INT(spinlock_iter_to_keep, "SPINLOCK_ITER_TO_KEEP", 1,
-              "Number of iterations to keep for spinlock fast forwarding");
+              "Number of iterations to keep for spinlock handling");
+  GET_VAR_INT(enable_watchdog, "ENABLE_WATCHDOG", 1,
+              "Enable the watchdog to skip instructions between "
+              "WARPSYNC.COLLECTIVE and its target instruction (inclusive)");
+  GET_VAR_INT(skip_tma_mem, "SKIP_TMA_MEM", 0,
+              "Enable the skipping of TMA memory instructions");
+  GET_VAR_INT(allow_reg_val_tracing, "ALLOW_REG_VAL_TRACING", 1,
+              "EXPERIMENTAL: Enable the tracing of register values. Trace "
+              "format is not stable. Trace version is 6.");
+  GET_VAR_INT(
+      nvbit_instrumentation_enabled, "NVBIT_INSTRUMENTATION_ENABLED", 1,
+      "Enable NVBit instrumentation. Can be controlled at runtime using "
+      "enable_nvbit_instrumentation() and disable_nvbit_instrumentation()");
   std::string pad(100, '-');
   printf("%s\n", pad.c_str());
 
@@ -279,21 +347,30 @@ void nvbit_at_init() {
 
   // Read in the spinlock_instructions.txt and build a map from kernel name to
   // spinlock instruction indices
-  if (enable_spinlock_fast_forward) {
+  if (spinlock_handling_mode > SPINLOCK_MODE_NONE) {
     std::string spinlock_instr_file =
         user_folder + "/spinlock_detection/spinlock_instructions.txt";
     std::ifstream instr_fs(spinlock_instr_file);
     std::string line;
     while (std::getline(instr_fs, line)) {
+      // Skip blank lines and comment lines emitted by the spinlock tool
+      if (line.empty() || line[0] == '#')
+        continue;
       auto [kernel_name, indices] = parse_spinlock_instructions(line);
       spinlock_instr_map[kernel_name] = new std::vector<uint32_t>(indices);
     }
     instr_fs.close();
   }
+  warpsync_collective_watchdog = WatchdogFactory::create(enable_watchdog);
 }
 
-/* Set used to avoid re-instrumenting the same functions multiple times */
-std::unordered_set<CUfunction> already_instrumented;
+/* Set used to avoid re-instrumenting the same functions multiple times.
+ * Keyed on the CUfunction handle, the function's PC address, and its mangled
+ * name, since a single program (e.g. cuFFT LTO) can reuse a handle or a PC
+ * address for a different kernel across launches. */
+std::unordered_set<std::tuple<CUfunction, uint64_t, std::string>,
+                   accelsimUtils::TupleHash>
+    already_instrumented;
 
 /* instrument each memory instruction adding a call to the above instrumentation
  * function */
@@ -308,7 +385,10 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
   for (auto f : related_functions) {
     /* "recording" function was instrumented, if set insertion failed
      * we have already encountered this function */
-    if (!already_instrumented.insert(f).second) {
+    uint64_t func_addr = nvbit_get_func_addr(ctx, f);
+    std::string func_name = nvbit_get_func_name(ctx, f, true);
+    if (!already_instrumented.insert(std::make_tuple(f, func_addr, func_name))
+             .second) {
       continue;
     }
 
@@ -318,18 +398,14 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
              nvbit_get_func_name(ctx, f), nvbit_get_func_addr(ctx, f));
     }
 
+    // reset the watchdog
+    warpsync_collective_watchdog->reset();
+
     uint32_t cnt = 0;
     /* iterate on all the static instructions in the function */
     for (auto instr : instrs) {
+
       uint32_t line_num = 0;
-      // Temporary workaround for a bug in NVBit 1.7.4, which does not correctly
-      // handle `call.rel`. Instrumenting this instruction leads to illegal
-      // memory access. Refer to:
-      // https://github.com/NVlabs/NVBit/issues/142#issue-2911561744
-      if (!strcmp(instr->getOpcode(), "CALL.REL.NOINC")) {
-        printf("Warning: Ignoring CALL.REL.NOINC (NVBit 1.7.4 bug)\n");
-        continue;
-      }
 
       if (cnt < instr_begin_interval || cnt >= instr_end_interval) {
         cnt++;
@@ -338,6 +414,25 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 
       if (verbose >= 2) {
         instr->printDecoded();
+      }
+
+      warpsync_collective_watchdog->observe_instruction(instr);
+
+      if (warpsync_collective_watchdog->is_in_region()) {
+        // if the opcode matches with "WARPSYNC.COLLECTIVE",
+        // print to stdout the PC value and the immeidate value
+        if (verbose > 1 &&
+            strcmp(instr->getOpcode(), "WARPSYNC.COLLECTIVE") == 0) {
+          assert(1 < instr->getNumOperands());
+          printf(
+              "Encountered WARPSYNC.COLLECTIVE PC: 0x%lx, Immediate: 0x%lx\n",
+              instr->getOffset(), instr->getOperand(1)->u.imm_uint64.value);
+        }
+        continue;
+      }
+
+      if (skip_tma_mem && instr->isTMAMem()) {
+        continue;
       }
 
       if (lineinfo) {
@@ -361,7 +456,16 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
       int dst_oprd = -1;
       int mem_oper_idx = -1;
       int num_mref = 0;
+      // Support up to two immediate operands
       uint64_t imm_value = 0;
+      uint64_t imm_value2 = 0;
+      int imm_count = 0;
+      // Check if `gsb` exists in full SASS string and the instruction is a GMMA
+      // instruction
+      bool is_gmma_instruction = strstr(instr->getSass(), "GMMA") != NULL;
+      // A GMMA instruction with gsb is a commit group
+      int is_gmma_commit_group =
+          is_gmma_instruction && strstr(instr->getSass(), "gsb") != NULL;
 
       for (int i = 0; i < instr->getNumOperands(); ++i) {
         const InstrType::operand_t *op = instr->getOperand(i);
@@ -384,11 +488,29 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
             src_oprd[srcNum] = instr->getOperand(i)->u.reg.num;
             srcNum++;
           }
+        } else if (op->type == InstrType::OperandType::UREG) {
+          if (i == 0) {
+            // find dst reg
+            dst_oprd = instr->getOperand(0)->u.reg.num + UREG_OFFSET;
+          } else {
+            // find src regs
+            assert(srcNum < MAX_SRC);
+            src_oprd[srcNum] = instr->getOperand(i)->u.reg.num + UREG_OFFSET;
+            srcNum++;
+          }
         }
-        // Add immediate value for DEPBAR instruction
+        // Add immediate value(s) for instructions with IMM_UINT64 operands
         else if (op->type == InstrType::OperandType::IMM_UINT64) {
-          imm_value = instr->getOperand(i)->u.imm_uint64.value;
+          if (imm_count == 0) {
+            imm_value = instr->getOperand(i)->u.imm_uint64.value;
+          } else if (imm_count == 1) {
+            imm_value2 = instr->getOperand(i)->u.imm_uint64.value;
+          }
+          imm_count++;
         }
+        // TMA param handle is handled as a whole with
+        // nvbit_add_call_arg_tma_param_handle
+        // Skip here
       }
 
       do {
@@ -403,8 +525,21 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
         nvbit_add_call_arg_const_val32(instr, opcode_id);
         nvbit_add_call_arg_const_val32(instr, (int)instr->getOffset());
 
+        /* tma setup */
+        if (instr->isTMAMem()) {
+          // Set is_mem to true and add tma param handle
+          nvbit_add_call_arg_const_val32(instr, 1);
+          nvbit_add_call_arg_tma_param_handle_and_size(instr, ctx);
+        } else {
+          // Dummy values for regular instructions
+          nvbit_add_call_arg_const_val32(instr, 0);
+          nvbit_add_call_arg_const_val64(instr, 0);
+          nvbit_add_call_arg_const_val32(instr, 0);
+        }
+
         /* mem addresses info */
         if (mem_oper_idx >= 0) {
+          // Set is_mem to true
           nvbit_add_call_arg_const_val32(instr, 1);
           assert(num_mref <= 2);
           if (num_mref == 2) { // LDGSTS
@@ -429,8 +564,9 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
         }
         nvbit_add_call_arg_const_val32(instr, srcNum);
 
-        /* immediate info */
+        /* immediate info (up to two immediates) */
         nvbit_add_call_arg_const_val64(instr, imm_value);
+        nvbit_add_call_arg_const_val64(instr, imm_value2);
 
         /* add pointer to channel_dev and other counters*/
         nvbit_add_call_arg_const_val64(instr, (uint64_t)&channel_dev);
@@ -444,6 +580,45 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
         /* Add instruction index for current instr (spinlock detection) */
         nvbit_add_call_arg_const_val32(instr, (uint32_t)instr->getIdx());
 
+        /* add register values */
+        // If >= 256, it is a uniform register
+        auto add_reg_val = [&](int reg_num) {
+          if (reg_num >= 256) {
+            nvbit_add_call_arg_ureg_val(instr, reg_num - UREG_OFFSET);
+          } else {
+            nvbit_add_call_arg_reg_val(instr, reg_num);
+          }
+        };
+        if (dst_oprd >= 0) {
+          add_reg_val(dst_oprd);
+        } else {
+          add_reg_val(0);
+        }
+        for (int i = 0; i < srcNum; i++) {
+          add_reg_val(src_oprd[i]);
+        }
+        for (int i = srcNum; i < MAX_SRC; i++) {
+          // Let tool read in dummy values
+          // this will get ignored anyway when
+          // we are printing to files by checking src_oprd's reg number
+          add_reg_val(0);
+        }
+
+        // Opcode-defined generic aux register value (per-lane).
+        // Default: 0 (unused). Add opcode-specific cases below.
+        //   SYNCS.EXCH.64 — hi half (Rn+1) of src2, to be fused with
+        //   srcRegVals[1] into a 64-bit column by the writer.
+        int aux_reg = 0;
+        if (strcmp(instr->getOpcode(), "SYNCS.EXCH.64") == 0) {
+          assert(srcNum >= 2 && "SYNCS.EXCH.64 expected >= 2 src regs");
+          assert(src_oprd[1] != 255 && src_oprd[1] != 511 &&
+                 "SYNCS.EXCH.64 src2 is RZ/URZ; cannot form 64-bit pair");
+          aux_reg = src_oprd[1] + 1;
+        }
+        add_reg_val(aux_reg);
+
+        // Add is_gmma_commit_group flag
+        nvbit_add_call_arg_const_val32(instr, is_gmma_commit_group);
         mem_oper_idx--;
       } while (mem_oper_idx >= 0);
 
@@ -478,7 +653,9 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
   // Mark if the kernel should be traced
   std::string func_name = std::string(nvbit_get_func_name(ctx, func, true));
   if (active_from_start && should_trace_kernel(ctx_kernelid[ctx], func_name))
-    active_region = true;
+    active_region = nvbit_instrumentation_enabled;
+  else
+    active_region = false;
 
   // Terminate tracing if the limit number of kernels is reached
   if (terminate_after_limit_number_of_kernels_reached && g_max_kernel_id != 0 &&
@@ -569,15 +746,26 @@ static void enter_kernel_launch(CUcontext ctx, CUfunction func,
             (uint64_t)nvbit_get_local_mem_base_addr(ctx));
     fprintf(ctx_resultsFile[ctx], "-nvbit version = %s\n", NVBIT_VERSION);
     fprintf(ctx_resultsFile[ctx], "-accelsim tracer version = %s\n",
-            TRACER_VERSION);
+            allow_reg_val_tracing ? TRACER_VERSION_ALLOW_REG_VAL
+                                  : TRACER_VERSION);
     fprintf(ctx_resultsFile[ctx], "-enable lineinfo = %d\n", lineinfo);
     fprintf(ctx_resultsFile[ctx], "\n");
 
-    fprintf(ctx_resultsFile[ctx],
-            "#traces format = [line_num] PC mask dest_num [reg_dests] "
-            "opcode src_num "
-            "[reg_srcs] mem_width [adrrescompress?] [mem_addresses] "
-            "immediate\n");
+    if (allow_reg_val_tracing) {
+      fprintf(ctx_resultsFile[ctx],
+              "#traces format = [line_num] PC mask dest_num [reg_dests] "
+              "opcode src_num "
+              "[reg_srcs] mem_width [adrrescompress?] [mem_addresses] "
+              "immediate1 immediate2 Val|NoVal [dest_val_num] [dest_val] ... "
+              "[src_val1_num] [src_val1] ... [...] "
+              "[src_valX_num] [src_valX] ...\n");
+    } else {
+      fprintf(ctx_resultsFile[ctx],
+              "#traces format = [line_num] PC mask dest_num [reg_dests] "
+              "opcode src_num "
+              "[reg_srcs] mem_width [adrrescompress?] [mem_addresses] "
+              "immediate1 immediate2\n");
+    }
     fprintf(ctx_resultsFile[ctx], "\n");
   }
 
@@ -614,6 +802,12 @@ static void leave_kernel_launch(CUcontext ctx, CUfunction func) {
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     printf("cuda error: %s\n", cudaGetErrorName(err));
+    printf("cuda error explanation: %s\n", cudaGetErrorString(err));
+    if (!xz_compress_trace) {
+      fclose(ctx_resultsFile[ctx]);
+    } else {
+      pclose(ctx_resultsFile[ctx]);
+    }
   }
   assert(err == cudaSuccess);
 
@@ -657,10 +851,6 @@ static void leave_kernel_launch(CUcontext ctx, CUfunction func) {
       pclose(ctx_resultsFile[ctx]);
     }
   }
-
-  std::string func_name = std::string(nvbit_get_func_name(ctx, func, true));
-  if (active_from_start && !should_trace_kernel(ctx_kernelid[ctx], func_name))
-    active_region = false;
 }
 
 void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
@@ -829,7 +1019,7 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
   // For cuProfiler, we need to set the active region accordingly
   case API_CUDA_cuProfilerStart: {
     if (is_exit && !active_from_start) {
-      active_region = true;
+      active_region = nvbit_instrumentation_enabled;
     }
   } break;
   case API_CUDA_cuProfilerStop: {
@@ -928,6 +1118,19 @@ void base_delta_compress(const uint64_t *addrs, const std::bitset<32> &mask,
   }
 }
 
+void base_delta_compress_tma(const uint64_t *addrs, const size_t num_addrs,
+                             const std::bitset<32> &mask, uint64_t &base_addr,
+                             std::vector<long long> &deltas) {
+  // TMA version for delta compression
+  bool warp_active = mask.any() && num_addrs > 1;
+  if (warp_active) {
+    base_addr = addrs[0];
+    for (size_t i = 1; i < num_addrs; i++) {
+      deltas.push_back(addrs[i] - addrs[i - 1]);
+    }
+  }
+}
+
 void trim_string(std::string &str) {
   // Remove the leading and trailing spaces
   str.erase(0, str.find_first_not_of(' '));
@@ -963,6 +1166,41 @@ parse_spinlock_instructions(const std::string &line) {
   return {kernel_name, indices};
 }
 
+/* Emit a REPLAY_START or REPLAY_END marker to the trace file */
+void emit_replay_marker(FILE *outfile, inst_trace_t *trace,
+                        const char *marker_opcode) {
+  // CTA ID
+  fprintf(outfile, "%d ", trace->cta_id_x);
+  fprintf(outfile, "%d ", trace->cta_id_y);
+  fprintf(outfile, "%d ", trace->cta_id_z);
+  fprintf(outfile, "%d ", trace->warpid_tb);
+  // Cluster info
+  fprintf(outfile, "%d ", trace->cluster_id_x);
+  fprintf(outfile, "%d ", trace->cluster_id_y);
+  fprintf(outfile, "%d ", trace->cluster_id_z);
+  fprintf(outfile, "%d ", trace->cluster_cta_id_x);
+  fprintf(outfile, "%d ", trace->cluster_cta_id_y);
+  fprintf(outfile, "%d ", trace->cluster_cta_id_z);
+  fprintf(outfile, "%d ", trace->cluster_rank);
+  // PC (use 0000 for markers)
+  fprintf(outfile, "0000 ");
+  // Mask (all active)
+  fprintf(outfile, "ffffffff ");
+  // dest_num = 0
+  fprintf(outfile, "0 ");
+  // Opcode
+  fprintf(outfile, "%s ", marker_opcode);
+  // src_num = 0, mem_width = 0, imm1 = 0, imm2 = 0
+  fprintf(outfile, "0 0 0 0\n");
+}
+
+/* Per-warp state for mark_region mode */
+struct warp_replay_state_t {
+  bool in_region;     // currently inside spinlock region
+  bool start_emitted; // REPLAY_START already written for this region
+  int iter_count;     // iterations recorded so far
+};
+
 void *recv_thread_fun(void *args) {
   CUcontext ctx = (CUcontext)args;
   char *recv_buffer = (char *)malloc(CHANNEL_SIZE);
@@ -974,31 +1212,58 @@ void *recv_thread_fun(void *args) {
   // encountered (clear the counter)
   std::map<warp_key_t, counter_t> warp_counter_map;
 
+  // Per-warp replay state for mark_region mode
+  std::map<warp_key_t, warp_replay_state_t> warp_replay_map;
+
   while (recv_thread_started) {
     uint32_t num_recv_bytes = 0;
     if (recv_thread_receiving &&
         (num_recv_bytes = channel_host.recv(recv_buffer, CHANNEL_SIZE)) > 0) {
       uint32_t num_processed_bytes = 0;
       while (num_processed_bytes < num_recv_bytes) {
-        inst_trace_t *ma = (inst_trace_t *)&recv_buffer[num_processed_bytes];
+        inst_trace_t *trace = (inst_trace_t *)&recv_buffer[num_processed_bytes];
 
         /* when we get this cta_id_x it means the kernel has completed
          */
-        if (ma->cta_id_x == -1) {
+        if (trace->cta_id_x == -1) {
           recv_thread_receiving = false;
-          if (enable_spinlock_fast_forward) {
-            // Clear the counter map for all warps as we are starting a new
-            // kernel
+          if (spinlock_handling_mode > SPINLOCK_MODE_NONE) {
+            // Clear the counter and replay maps for all warps as we are
+            // starting a new kernel
             warp_counter_map.clear();
+            warp_replay_map.clear();
           }
           break;
         }
 
-        /* Spinlock fast forwarding */
-        if (enable_spinlock_fast_forward) {
+        std::string opcode = id_to_opcode_map[trace->opcode_id];
+        // only dump reg val if opcode contains: BAR
+        bool dump_reg_val = false;
+        if (allow_reg_val_tracing &&
+            ((opcode.find("BAR") != std::string::npos ||
+              opcode.find("HGMMA") != std::string::npos ||
+              opcode.find("SYNCS.ARRIVE") != std::string::npos ||
+              opcode.find("SYNCS.EXCH.64") != std::string::npos ||
+              opcode.find("SYNCS.PHASECHK.TRANS64.TRYWAIT") !=
+                  std::string::npos ||
+              opcode.find("SYNCS.PHASECHK.TRANS64") != std::string::npos))) {
+          // SYNCS: Mbarrier related instructions
+          // SYNCS.ARRIVE: equivalent to mbarrier.arrive, register values are
+          // the arrival count or expect tx count SYNCS.EXCH.64: equivalent to
+          // mbarrier.init, register values are the mbarrier arrival count
+          // SYNCS.PHASECHK.TRANS64.TRYWAIT: equivalent to mbarrier.try_wait,
+          // register values are the phase this wait is for
+          // SYNCS.PHASECHK.TRANS64: equivalent to mbarrier.test_wait,
+          // register values are the phase this wait is for
+          dump_reg_val = true;
+        }
+
+        /* Spinlock handling (fast_forward or mark_region) */
+        if (spinlock_handling_mode > SPINLOCK_MODE_NONE) {
           // Check if this warp is in the warp_counter_map
-          warp_key_t warp_key = std::make_tuple(ma->cta_id_x, ma->cta_id_y,
-                                                ma->cta_id_z, ma->warpid_tb);
+          warp_key_t warp_key =
+              std::make_tuple(trace->cta_id_x, trace->cta_id_y, trace->cta_id_z,
+                              trace->warpid_tb);
           if (warp_counter_map.find(warp_key) == warp_counter_map.end()) {
             // This warp is not in the warp_counter_map, so we create a counter
             // for this warp using the spinlock instruction indices for the
@@ -1006,69 +1271,169 @@ void *recv_thread_fun(void *args) {
             std::vector<uint32_t> &indices =
                 *(spinlock_instr_map[ctx_current_kernel_name[ctx]]);
             warp_counter_map[warp_key] = create_counter(indices);
+            if (spinlock_handling_mode == SPINLOCK_MODE_MARK_REGION) {
+              warp_replay_map[warp_key] = {false, false, 0};
+            }
           }
 
           // Get the counter map for this warp
           auto &counter = warp_counter_map[warp_key];
+          bool is_spinlock_instr =
+              (counter.find(trace->instr_idx) != counter.end());
 
-          // Now check if we should start spinlock fast forwarding for this warp
-          if (counter.find(ma->instr_idx) != counter.end()) {
-            // We are still in a spinlock loop, so we increment the counter
-            counter[ma->instr_idx]++;
-            if (counter[ma->instr_idx] > spinlock_iter_to_keep) {
-              // This spinlock instruction is executed more than the threshold
-              // so we fast forward it in the output trace
-              // Note we are only fast forwarding the innermost spinlock loop
-              num_processed_bytes += sizeof(inst_trace_t);
-              continue;
+          if (spinlock_handling_mode == SPINLOCK_MODE_FAST_FORWARD) {
+            // Fast-forward mode: skip instructions beyond threshold
+            if (is_spinlock_instr) {
+              counter[trace->instr_idx]++;
+              if (counter[trace->instr_idx] > spinlock_iter_to_keep) {
+                // This spinlock instruction is executed more than the threshold
+                // so we fast forward it in the output trace
+                // Note we are only fast forwarding the innermost spinlock loop
+                num_processed_bytes += sizeof(inst_trace_t);
+                continue;
+              }
+            } else {
+              // We are exiting the innermost spinlock loop, so we reset the
+              // counter map for this warp
+              for (auto &[instr_idx, count] : counter) {
+                count = 0;
+              }
             }
-          } else {
-            // We are exiting the innermost spinlock loop, so we reset the
-            // counter map for this warp
-            for (auto &[instr_idx, count] : counter) {
-              count = 0;
+          } else if (spinlock_handling_mode == SPINLOCK_MODE_MARK_REGION) {
+            // Mark-region mode: emit REPLAY_START/REPLAY_END markers
+            auto &replay_state = warp_replay_map[warp_key];
+
+            if (is_spinlock_instr) {
+              counter[trace->instr_idx]++;
+
+              // Entering spinlock region
+              if (!replay_state.in_region) {
+                replay_state.in_region = true;
+                replay_state.start_emitted = false;
+                replay_state.iter_count = 1;
+              }
+
+              // Emit REPLAY_START before first instruction in region
+              if (!replay_state.start_emitted) {
+                emit_replay_marker(ctx_resultsFile[ctx], trace, "REPLAY_START");
+                replay_state.start_emitted = true;
+              }
+
+              // Skip if beyond first iteration
+              if (counter[trace->instr_idx] > spinlock_iter_to_keep) {
+                num_processed_bytes += sizeof(inst_trace_t);
+                continue;
+              }
+              // else: fall through to emit the instruction
+            } else {
+              // Non-spinlock instruction
+              if (replay_state.in_region) {
+                // Exiting spinlock region - emit REPLAY_END
+                emit_replay_marker(ctx_resultsFile[ctx], trace, "REPLAY_END");
+                replay_state.in_region = false;
+                replay_state.start_emitted = false;
+                // Reset counters
+                for (auto &[instr_idx, count] : counter) {
+                  count = 0;
+                }
+              }
+              // else: fall through to emit the instruction
             }
           }
         }
 
-        /* Dump the instruction trace information */
-        fprintf(ctx_resultsFile[ctx], "%d ", ma->cta_id_x);
-        fprintf(ctx_resultsFile[ctx], "%d ", ma->cta_id_y);
-        fprintf(ctx_resultsFile[ctx], "%d ", ma->cta_id_z);
-        fprintf(ctx_resultsFile[ctx], "%d ", ma->warpid_tb);
+        // Dump trace in text
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cta_id_x);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cta_id_y);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cta_id_z);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->warpid_tb);
+        // Cluster information
+        // Cluster id within the grid
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_id_x);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_id_y);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_id_z);
+        // CTA id within the cluster
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_cta_id_x);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_cta_id_y);
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_cta_id_z);
+        // CTA rank within the cluster
+        fprintf(ctx_resultsFile[ctx], "%d ", trace->cluster_rank);
         if (print_core_id) {
-          fprintf(ctx_resultsFile[ctx], "%d ", ma->sm_id);
-          fprintf(ctx_resultsFile[ctx], "%d ", ma->warpid_sm);
+          fprintf(ctx_resultsFile[ctx], "%d ", trace->sm_id);
+          fprintf(ctx_resultsFile[ctx], "%d ", trace->warpid_sm);
         }
         if (lineinfo) {
-          fprintf(ctx_resultsFile[ctx], "%d ", ma->line_num);
+          fprintf(ctx_resultsFile[ctx], "%d ", trace->line_num);
         }
-        fprintf(ctx_resultsFile[ctx], "%04x ", ma->vpc); // Print the virtual PC
+        fprintf(ctx_resultsFile[ctx], "%04x ",
+                trace->vpc); // Print the virtual PC
         fprintf(ctx_resultsFile[ctx], "%08x ",
-                ma->active_mask & ma->predicate_mask);
-        if (ma->GPRDst >= 0) {
-          fprintf(ctx_resultsFile[ctx], "1 ");
-          fprintf(ctx_resultsFile[ctx], "R%d ", ma->GPRDst);
-        } else
+                trace->active_mask & trace->predicate_mask);
+
+        // Helper function to print the register number
+        auto print_reg = [&](int reg_num) {
+          if (reg_num >= 256) {
+            fprintf(ctx_resultsFile[ctx], "UR%d ", reg_num - UREG_OFFSET);
+          } else {
+            fprintf(ctx_resultsFile[ctx], "R%d ", reg_num);
+          }
+        };
+
+        // Only regular instructions have register information
+        // While TMA instruction also does, but they are all
+        // uniform register and we cannot obtain them from
+        // iterating instruction operands during instrumentation
+        // In future we might want to add those by parsing
+        // TMA instruction SASS string for uniform register
+        // dependency tracking
+
+        // Dump destination register information
+        if (trace->inst_type == TracerInstrType::INST_TMA) {
+          // No destination register for TMA instructions
           fprintf(ctx_resultsFile[ctx], "0 ");
+        } else {
+          if (trace->inst.regular.GPRDst >= 0) { // GPR dst
+            fprintf(ctx_resultsFile[ctx], "1 ");
+            print_reg(trace->inst.regular.GPRDst);
+          } else
+            fprintf(ctx_resultsFile[ctx], "0 ");
+        }
 
         // Print the opcode.
         fprintf(ctx_resultsFile[ctx], "%s ",
-                id_to_opcode_map[ma->opcode_id].c_str());
-        unsigned src_count = 0;
-        for (int s = 0; s < MAX_SRC; s++) // GPR srcs count.
-          if (ma->GPRSrcs[s] >= 0)
-            src_count++;
-        fprintf(ctx_resultsFile[ctx], "%d ", src_count);
+                id_to_opcode_map[trace->opcode_id].c_str());
 
-        for (int s = 0; s < MAX_SRC; s++) // GPR srcs.
-          if (ma->GPRSrcs[s] >= 0)
-            fprintf(ctx_resultsFile[ctx], "R%d ", ma->GPRSrcs[s]);
+        // Dump source registers information
+        if (trace->inst_type == TracerInstrType::INST_TMA) {
+          // No source registers for TMA instructions
+          fprintf(ctx_resultsFile[ctx], "0 ");
+        } else {
+          // Handle source registers for regular instructions
+          unsigned src_count = 0;
+          for (int s = 0; s < MAX_SRC; s++) // GPR srcs count.
+            if (trace->inst.regular.GPRSrcs[s] >= 0)
+              src_count++;
+          fprintf(ctx_resultsFile[ctx], "%d ", src_count);
+
+          for (int s = 0; s < MAX_SRC; s++) { // GPR srcs.
+            if (trace->inst.regular.GPRSrcs[s] >= 0) {
+              print_reg(trace->inst.regular.GPRSrcs[s]);
+            }
+          }
+        }
+
+        // Print is_gmma_commit_group flag
+        bool is_gmma_instruction =
+            strstr(id_to_opcode_map[trace->opcode_id].c_str(), "GMMA") != NULL;
+        if (is_gmma_instruction) {
+          fprintf(ctx_resultsFile[ctx], "%d ", trace->is_gmma_commit_group);
+        }
 
         // print addresses
-        std::bitset<32> mask(ma->active_mask & ma->predicate_mask);
-        if (ma->is_mem) {
-          std::istringstream iss(id_to_opcode_map[ma->opcode_id]);
+        std::bitset<32> mask(trace->active_mask & trace->predicate_mask);
+        if (trace->inst_type == TracerInstrType::INST_REGULAR &&
+            trace->inst.regular.is_mem) {
+          std::istringstream iss(id_to_opcode_map[trace->opcode_id]);
           std::vector<std::string> tokens;
           std::string token;
           while (std::getline(iss, token, '.')) {
@@ -1085,21 +1450,22 @@ void *recv_thread_fun(void *args) {
 
           if (enable_compress) {
             // try base+stride format
-            base_stride_success =
-                base_stride_compress(ma->addrs, mask, base_addr, stride);
+            base_stride_success = base_stride_compress(
+                trace->inst.regular.addrs, mask, base_addr, stride);
             if (!base_stride_success) {
               // if base+stride fails, try base+delta format
-              base_delta_compress(ma->addrs, mask, base_addr, deltas);
+              base_delta_compress(trace->inst.regular.addrs, mask, base_addr,
+                                  deltas);
             }
           }
 
           if (base_stride_success && enable_compress) {
             // base + stride format
-            fprintf(ctx_resultsFile[ctx], "%u 0x%llx %d ",
+            fprintf(ctx_resultsFile[ctx], "%u 0x%lx %d ",
                     address_format::base_stride, base_addr, stride);
           } else if (!base_stride_success && enable_compress) {
             // base + delta format
-            fprintf(ctx_resultsFile[ctx], "%u 0x%llx ",
+            fprintf(ctx_resultsFile[ctx], "%u 0x%lx ",
                     address_format::base_delta, base_addr);
             for (int s = 0; s < deltas.size(); s++) {
               fprintf(ctx_resultsFile[ctx], "%lld ", deltas[s]);
@@ -1109,16 +1475,190 @@ void *recv_thread_fun(void *args) {
             fprintf(ctx_resultsFile[ctx], "%u ", address_format::list_all);
             for (int s = 0; s < 32; s++) {
               if (mask.test(s))
-                fprintf(ctx_resultsFile[ctx], "0x%016lx ", ma->addrs[s]);
+                fprintf(ctx_resultsFile[ctx], "0x%016lx ",
+                        trace->inst.regular.addrs[s]);
+            }
+          }
+        } else if (trace->inst_type == TracerInstrType::INST_TMA) {
+          // TMA instructions
+          // Check if the bitmask is all 0, if so, dont parse the TMA
+          // instruction
+          if ((trace->active_mask & trace->predicate_mask) == 0) {
+            // Dummy values to NOP TMA instruction
+            // transfer_size mbar_addr is_multicast byte_count oob_byte_count
+            // tma_base_delta base_addr transfer_count
+            fprintf(ctx_resultsFile[ctx], "0 0x0 0 0 0 4 0x0 0 ");
+          } else {
+            // Parse the TMA instruction
+            const char *opcode_str = id_to_opcode_map[trace->opcode_id].c_str();
+            TMATransferInfo_t info = nvbit_parse_tma_transfer_info(
+                ctx, opcode_str, trace->inst.tma.tma_param_handle,
+                trace->inst.tma.tma_param_handle_size);
+            // Get TMA transfer size, which is the data width
+            fprintf(ctx_resultsFile[ctx], "%d ", info.transfer_size);
+
+            // Get TMA mbar address
+            if (info.dst_memspace ==
+                InstrType::MemorySpace::DISTRIBUTED_SHARED) {
+              assert(info.dst.shared.is_mbar_valid &&
+                     "Invalid TMA mbar address");
+              fprintf(ctx_resultsFile[ctx], "0x%08x ",
+                      info.dst.shared.mbar_address);
+              if (info.is_multicast) {
+                // Using multicast
+                fprintf(ctx_resultsFile[ctx], "1 ");
+                // multicast flags
+                fprintf(ctx_resultsFile[ctx], "0x%04x ",
+                        info.multicast_cta_mask);
+              } else {
+                // Not using multicast
+                fprintf(ctx_resultsFile[ctx], "0 ");
+              }
+            } else {
+              // mbarrier address, set to 0
+              fprintf(ctx_resultsFile[ctx], "0x%08x ", 0);
+              // Not using multicast
+              fprintf(ctx_resultsFile[ctx], "0 ");
+            }
+            // This is the actual transfer byte count
+            fprintf(ctx_resultsFile[ctx], "%ld ", info.byte_count);
+
+            // This is the oob transfer byte count, if using tensor copy
+            if (info.is_tensor) {
+              fprintf(ctx_resultsFile[ctx], "%ld ",
+                      info.tensor.oob_transfer_count * info.transfer_size);
+            } else {
+              fprintf(ctx_resultsFile[ctx], "%ld ", 0);
+            }
+
+            // Determine the global address using callback API
+            // Callback collects inbound (non-OOB) addresses
+            struct TMAAddrCollector {
+              std::vector<uint64_t> addrs;
+              static void callback(const TMAElementAddress_t *raw_addrs,
+                                   size_t count, void *user_data) {
+                auto *self = static_cast<TMAAddrCollector *>(user_data);
+                for (size_t i = 0; i < count; i++) {
+                  if (!raw_addrs[i].is_oob) {
+                    self->addrs.push_back(raw_addrs[i].address);
+                  }
+                }
+              }
+            };
+            TMAAddrCollector collector;
+
+            if (info.src_memspace == InstrType::MemorySpace::GLOBAL) {
+              nvbit_parse_tma_src_addrs(ctx, opcode_str,
+                                        trace->inst.tma.tma_param_handle,
+                                        trace->inst.tma.tma_param_handle_size,
+                                        TMAAddrCollector::callback, &collector);
+            } else if (info.dst_memspace == InstrType::MemorySpace::GLOBAL) {
+              nvbit_parse_tma_dst_addrs(ctx, opcode_str,
+                                        trace->inst.tma.tma_param_handle,
+                                        trace->inst.tma.tma_param_handle_size,
+                                        TMAAddrCollector::callback, &collector);
+            }
+
+            size_t global_count_inbound = collector.addrs.size();
+            uint64_t *global_addrs = collector.addrs.data();
+
+            // Try to compress memory addresses
+            uint64_t base_addr = 0;
+            std::vector<long long> deltas;
+            if (enable_compress) {
+              base_delta_compress_tma(global_addrs, global_count_inbound, mask,
+                                      base_addr, deltas);
+            }
+
+            if (enable_compress) {
+              fprintf(ctx_resultsFile[ctx], "%u 0x%lx ",
+                      address_format::tma_base_delta, base_addr);
+              fprintf(ctx_resultsFile[ctx], "%d ", info.transfer_count);
+              for (size_t s = 0; s < deltas.size(); s++) {
+                fprintf(ctx_resultsFile[ctx], "%lld ", deltas[s]);
+              }
+            } else {
+              // list all the addresses
+              fprintf(ctx_resultsFile[ctx], "%u ",
+                      address_format::tma_list_all);
+              fprintf(ctx_resultsFile[ctx], "%d ", info.transfer_count);
+              for (size_t s = 0; s < global_count_inbound; s++) {
+                fprintf(ctx_resultsFile[ctx], "0x%016lx ", global_addrs[s]);
+              }
             }
           }
         } else {
           fprintf(ctx_resultsFile[ctx], "0 ");
         }
 
-        // Print the immediate
-        fprintf(ctx_resultsFile[ctx], "%d ", ma->imm);
+        // Print the immediate values
+        fprintf(ctx_resultsFile[ctx], "%ld ", trace->inst.regular.imm);
+        fprintf(ctx_resultsFile[ctx], "%ld ", trace->inst.regular.imm2);
 
+        if (allow_reg_val_tracing) {
+          // Trace version will be 6, a Val|NoVal will follow the immediate
+          // number Print the register values if dump_reg_val is true
+          if (dump_reg_val) {
+            fprintf(ctx_resultsFile[ctx], "Val ");
+
+            // dump destination register values if GPRDst >= 0
+            if (trace->inst.regular.GPRDst >= 0) {
+              auto minmax_pair =
+                  std::minmax_element(std::begin(trace->inst.regular.desRegVal),
+                                      std::end(trace->inst.regular.desRegVal));
+              bool is_all_same = (*minmax_pair.first == *minmax_pair.second);
+              if (!is_all_same) {
+                fprintf(ctx_resultsFile[ctx], "32 ");
+                for (int tid = 0; tid < 32; tid++) {
+                  fprintf(ctx_resultsFile[ctx], "%08x ",
+                          trace->inst.regular.desRegVal[tid]);
+                }
+              } else {
+                fprintf(ctx_resultsFile[ctx], "1 ");
+                fprintf(ctx_resultsFile[ctx], "%08x ", *minmax_pair.first);
+              }
+            }
+            // Build the per-src hi pointer: nullptr means emit lo as 32-bit;
+            // non-null means fuse (hi << 32) | lo into 64-bit. Opcode-specific
+            // wiring of auxRegVals lives here and nowhere else below.
+            const uint32_t *src_hi[MAX_SRC] = {nullptr};
+            if (opcode == "SYNCS.EXCH.64") {
+              // SYNCS.EXCH.64's 64-bit src2: srcRegVals[1] lo + auxRegVals hi.
+              src_hi[1] = trace->inst.regular.auxRegVals;
+            }
+
+            for (int s = 0; s < MAX_SRC; s++) {
+              if (trace->inst.regular.GPRSrcs[s] < 0)
+                continue;
+              const uint32_t *lo = trace->inst.regular.srcRegVals[s];
+              const uint32_t *hi = src_hi[s];
+              if (hi != nullptr) {
+                uint64_t v64[32];
+                for (int tid = 0; tid < 32; tid++)
+                  v64[tid] = ((uint64_t)hi[tid] << 32) | (uint64_t)lo[tid];
+                auto mm = std::minmax_element(std::begin(v64), std::end(v64));
+                if (*mm.first != *mm.second) {
+                  fprintf(ctx_resultsFile[ctx], "32 ");
+                  for (int tid = 0; tid < 32; tid++)
+                    fprintf(ctx_resultsFile[ctx], "%016lx ", v64[tid]);
+                } else {
+                  fprintf(ctx_resultsFile[ctx], "1 %016lx ", *mm.first);
+                }
+              } else {
+                auto mm = std::minmax_element(lo, lo + 32);
+                if (*mm.first != *mm.second) {
+                  fprintf(ctx_resultsFile[ctx], "32 ");
+                  for (int tid = 0; tid < 32; tid++)
+                    fprintf(ctx_resultsFile[ctx], "%08x ", lo[tid]);
+                } else {
+                  fprintf(ctx_resultsFile[ctx], "1 %08x ", *mm.first);
+                }
+              }
+            }
+          } else {
+            fprintf(ctx_resultsFile[ctx], "NoVal ");
+          }
+        }
         fprintf(ctx_resultsFile[ctx], "\n");
 
         num_processed_bytes += sizeof(inst_trace_t);

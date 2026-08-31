@@ -13,22 +13,29 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Enable position-independent code for all targets (required for shared libraries/Python module)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if($ENV{ACCELSIM_CONFIG} STREQUAL "debug")
     set(CMAKE_BUILD_TYPE Debug)
 else()
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Override default CMake Release flags to keep assertions enabled
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g3 -fPIC -Wall")
+# Remove -DNDEBUG from Release and RelWithDebInfo to keep assertions enabled
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
 # check envrionment variable string compare
-if(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
+if(${CMAKE_BUILD_TYPE} STREQUAL "Debug" OR ${CMAKE_BUILD_TYPE} STREQUAL "RelWithDebInfo")
     add_compile_definitions(DEBUG=1)
-    add_compile_options(-Wall -O0 -g3 -fPIC)
+    # add_compile_options(-Wall -O0 -g3 -fPIC)
 else()
     add_compile_definitions(DEBUG=0)
 endif()
+
+# Uncomment to enable debug symbols and frame pointers for profiling (perf, gdb, vtune)
+# add_compile_options(-g -fno-omit-frame-pointer)
 
 # run command
 execute_process(
@@ -75,6 +82,7 @@ include_directories(${CMAKE_BINARY_DIR})
 include_directories(ISA_Def)
 include_directories(trace-driven)
 include_directories(trace-parser)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../util/tracer_nvbit/tracer_tool)
 
 
 add_executable(accel-sim.out accel-sim.cc main.cc)

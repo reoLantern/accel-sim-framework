@@ -88,6 +88,7 @@ enum TraceInstrOpcode {
   OP_STG,
   OP_STL,
   OP_STS,
+  OP_STAS,
   OP_MATCH,
   OP_QSPC,
   OP_ATOM,
@@ -227,6 +228,30 @@ enum TraceInstrOpcode {
   OP_SUQUERY,
   // Shared between ampere and turing
   OP_F2FP,
+  // For Hopper TMA
+  OP_UBLKCP,
+  OP_UBLKPF,
+  OP_UBLKRED,
+  OP_UTMACCTL,
+  OP_UTMACMDFLUSH,
+  OP_UTMALDG,
+  OP_UTMAPF,
+  OP_UTMAREDG,
+  OP_UTMASTG,
+  // For Hopper GMMA
+  OP_WARPGROUP,
+  OP_QGMMA,
+  OP_HGMMA,
+  OP_IGMMA,
+  // Synchronization-related Instructions
+  OP_FENCE,
+  OP_SYNCS,
+  OP_ARRIVES,
+  // Control Instructions
+  OP_ELECT,
+  // Replay region markers (pseudo-opcodes for spinlock simulation)
+  OP_REPLAY_START,
+  OP_REPLAY_END,
   SASS_NUM_OPCODES /* The total number of opcodes. */
 };
 typedef enum TraceInstrOpcode sass_op_type;

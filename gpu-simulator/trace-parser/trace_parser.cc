@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "trace_parser.h"
+#include "warp_trace_stream.h"
 
 bool is_number(const std::string &s) {
   std::string::const_iterator it = s.begin();
@@ -33,20 +34,11 @@ void split(const std::string &str, std::vector<std::string> &cont,
 }
 
 inst_trace_t::inst_trace_t() {
-  memadd_info = NULL;
   imm = 0;
+  imm2 = 0;
 }
 
-inst_trace_t::~inst_trace_t() {
-  if (memadd_info != NULL) delete memadd_info;
-}
-
-inst_trace_t::inst_trace_t(const inst_trace_t &b) {
-  if (memadd_info != NULL) {
-    memadd_info = new inst_memadd_info_t();
-    memadd_info = b.memadd_info;
-  }
-}
+inst_trace_t::~inst_trace_t() {}
 
 bool inst_trace_t::check_opcode_contain(const std::vector<std::string> &opcode,
                                         std::string param) const {
@@ -82,14 +74,28 @@ unsigned inst_trace_t::get_datawidth_from_opcode(
   return 4;  // default is 4 bytes
 }
 
-kernel_trace_t::kernel_trace_t(const std::string &filePath)
-    : pipeReader(filePath) {
+static bool hasEnding(const std::string &s, const std::string &suffix) {
+  if (s.length() < suffix.length()) return false;
+  return s.compare(s.length() - suffix.length(), suffix.length(), suffix) == 0;
+}
+
+kernel_trace_t::kernel_trace_t(const std::string &filePath) {
   kernel_name = filePath;
   shmem_base_addr = 0;
   local_base_addr = 0;
   binary_verion = 0;
   trace_verion = 0;
+
+  if (hasEnding(filePath, ".tracez")) {
+    is_tracez = true;
+    // PipeReader left default-constructed (unused for .tracez)
+  } else {
+    is_tracez = false;
+    pipeReader = PipeReader(filePath);
+  }
 }
+
+kernel_trace_t::~kernel_trace_t() { delete tracez_reader; }
 
 void inst_memadd_info_t::base_stride_decompress(
     unsigned long long base_address, int stride,
@@ -132,8 +138,23 @@ void inst_memadd_info_t::base_delta_decompress(
   }
 }
 
+void tma_inst_memaddr_info_t::base_delta_decompress(
+    unsigned long long base_address, const std::vector<long long> &deltas,
+    const std::bitset<WARP_SIZE> &mask) {
+  if (mask.any()) {
+    addrs.push_back(base_address);
+    for (auto delta : deltas) {
+      addrs.push_back(addrs.back() + delta);
+    }
+  }
+}
+
 bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
-                                     unsigned enable_lineinfo) {
+                                     unsigned enable_lineinfo,
+                                     dim3 header_cta_id,
+                                     dim3 header_cluster_cta_id,
+                                     dim3 header_cluster_id,
+                                     unsigned header_cluster_rank) {
   std::stringstream ss;
   ss.str(trace);
 
@@ -148,6 +169,12 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
 
     ss >> std::dec >> threadblock_x >> threadblock_y >> threadblock_z >>
         warpid_tb;
+  } else {
+    // Set the cta ids
+    cta_id = header_cta_id;
+    cluster_cta_id = header_cluster_cta_id;
+    cluster_id = header_cluster_id;
+    cluster_rank = header_cluster_rank;
   }
   if (enable_lineinfo) {
     ss >> std::dec >> line_num;
@@ -160,9 +187,22 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
 
   ss >> std::dec >> reg_dsts_num;
   assert(reg_dsts_num <= MAX_DST);
+  auto parse_trace_reg_num = [&](trace_reg_t &reg) {
+    std::string reg_str;
+    ss >> reg_str;
+    // Parse the register type and number
+    if (reg_str.find("UR") != std::string::npos)
+      reg.type = UREG;
+    else if (reg_str.find("R") != std::string::npos)
+      reg.type = REG;
+    else if (reg_str.find("UP") != std::string::npos)
+      reg.type = UPRED;
+    else if (reg_str.find("P") != std::string::npos)
+      reg.type = PRED;
+    reg.num = std::stoi(reg_str.substr(reg_str.find_first_not_of("RURPUP")));
+  };
   for (unsigned i = 0; i < reg_dsts_num; ++i) {
-    ss >> temp;
-    sscanf(temp.c_str(), "R%d", &reg_dest[i]);
+    parse_trace_reg_num(reg_dest[i]);
   }
 
   ss >> opcode;
@@ -170,8 +210,12 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
   ss >> reg_srcs_num;
   assert(reg_srcs_num <= MAX_SRC);
   for (unsigned i = 0; i < reg_srcs_num; ++i) {
-    ss >> temp;
-    sscanf(temp.c_str(), "R%d", &reg_src[i]);
+    parse_trace_reg_num(reg_src[i]);
+  }
+
+  // Parse is_gmma_commit_group flag if the instruction is a GMMA instruction
+  if (strstr(opcode.c_str(), "GMMA") != NULL) {
+    ss >> std::dec >> is_gmma_commit_group;
   }
 
   // parse mem info
@@ -179,10 +223,61 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
   unsigned mem_width = 0;
 
   ss >> mem_width;
+  // Check if the list of string is included in "opcode"
+  std::vector<std::string> tma_opcodes = {"UTMALDG",  "UTMASTG", "UTMAPF",
+                                          "UTMAREDG", "UBLKCP",  "UBLKPF",
+                                          "UBLKRED"};
+  bool is_tma = false;
+  for (auto op : tma_opcodes) {
+    if (opcode.find(op) != std::string::npos) {
+      is_tma = true;
+      break;
+    }
+  }
 
-  if (mem_width > 0)  // then it is a memory inst
-  {
-    memadd_info = new inst_memadd_info_t();
+  if (is_tma) {
+    tma_memadd_info = std::make_unique<tma_inst_memaddr_info_t>();
+    tma_memadd_info->width = mem_width;
+    ss >> std::hex >> tma_mbar_addr;
+    ss >> std::dec >> tma_is_multicast;
+    if (tma_is_multicast) {
+      ss >> std::hex >> tma_multicast_cta_mask;
+    }
+    ss >> std::dec >> tma_byte_count;
+    ss >> std::dec >> tma_oob_byte_count;
+    ss >> std::dec >> address_mode;
+    int32_t transfer_count = 0;
+    if (address_mode == address_format::tma_list_all) {
+      ss >> std::dec >> transfer_count;
+      for (int s = 0; s < transfer_count; s++) {
+        uint64_t addr = 0;
+        ss >> std::hex >> addr;
+        tma_memadd_info->addrs.push_back(addr);
+      }
+    } else if (address_mode == address_format::tma_base_delta) {
+      uint64_t base_addr = 0;
+      std::vector<long long> deltas;
+      ss >> std::hex >> base_addr;
+      ss >> std::dec >> transfer_count;
+      // If there are actual accesses, need to parse the deltas
+      if (transfer_count > 0) {
+        for (int s = 1; s < transfer_count; s++) {
+          long long delta = 0;
+          ss >> std::dec >> delta;
+          deltas.push_back(delta);
+        }
+        tma_memadd_info->base_delta_decompress(base_addr, deltas, mask_bits);
+      } else {
+        tma_memadd_info->addrs.clear();
+      }
+    } else {
+      assert(0 && "Unsupported address mode");
+    }
+  }
+
+  if (!is_tma && mem_width > 0) {
+    // then it is a memory inst
+    memadd_info = std::make_unique<inst_memadd_info_t>();
 
     // read the memory width from the opcode, as nvbit can report it incorrectly
     std::vector<std::string> opcode_tokens = get_opcode_tokens();
@@ -209,7 +304,16 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
       std::vector<long long> deltas;
       // read addresses as base address and deltas
       ss >> std::hex >> base_address;
+      // No delta will be pushed if there is only one bit set in the mask
+      // Find the first bit set
+      int first_bit_set = -1;
       for (int s = 0; s < WARP_SIZE; s++) {
+        if (mask_bits.test(s)) {
+          first_bit_set = s;
+          break;
+        }
+      }
+      for (int s = first_bit_set + 1; s < WARP_SIZE; s++) {
         if (mask_bits.test(s)) {
           long long delta = 0;
           ss >> std::dec >> delta;
@@ -217,10 +321,62 @@ bool inst_trace_t::parse_from_string(std::string trace, unsigned trace_version,
         }
       }
       memadd_info->base_delta_decompress(base_address, deltas, mask_bits);
+    } else {
+      assert(0 && "Unsupported address mode");
     }
   }
 
   ss >> imm;
+  imm2 = 0;
+  if (trace_version == 6) {
+    // Try to read a second immediate; if it fails (old traces), leave imm2=0.
+    uint64_t tmp_imm2 = 0;
+    if (ss >> tmp_imm2) {
+      imm2 = tmp_imm2;
+    } else {
+      ss.clear();
+    }
+  }
+
+  if (trace_version == 6) {
+    // check Val or NoVal
+    std::string val_or_no_val;
+    ss >> val_or_no_val;
+    if (val_or_no_val == "Val") {
+      // Parse the register values
+      auto parse_trace_reg_vals = [&](reg_val_t &reg_val) {
+        uint32_t distinct_values;
+        ss >> std::dec >> distinct_values;
+        if (distinct_values == 1) {
+          // All the values are the same
+          uint64_t value;
+          ss >> std::hex >> value;
+          for (int j = 0; j < WARP_SIZE; j++) {
+            reg_val[j] = value;
+          }
+        } else if (distinct_values == WARP_SIZE) {
+          // Different values
+          for (int j = 0; j < WARP_SIZE; j++) {
+            ss >> std::hex >> reg_val[j];
+          }
+        } else {
+          // Invalid number of distinct values
+          assert(0 && "Invalid number of distinct values");
+        }
+      };
+      // Resize the register values
+      reg_dest_vals.resize(reg_dsts_num);
+      reg_src_vals.resize(reg_srcs_num);
+      // Parse the destination register values
+      for (unsigned i = 0; i < reg_dsts_num; i++) {
+        parse_trace_reg_vals(reg_dest_vals[i]);
+      }
+      // Parse the source register values
+      for (unsigned i = 0; i < reg_srcs_num; i++) {
+        parse_trace_reg_vals(reg_src_vals[i]);
+      }
+    }
+  }
 
   // Finish Parsing
 
@@ -236,7 +392,7 @@ std::vector<trace_command> trace_parser::parse_commandlist_file() {
   fs.open(kernellist_filename);
 
   if (!fs.is_open()) {
-    std::cout << "Unable to open file: " << kernellist_filename << std::endl;
+    std::cerr << "Unable to open file: " << kernellist_filename << std::endl;
     exit(1);
   }
 
@@ -284,71 +440,90 @@ void trace_parser::parse_memcpy_info(const std::string &memcpy_command,
   ss >> std::dec >> count;
 }
 
+// Parse a single kernel header line (shared between text and tracez paths)
+static void parse_kernel_header_line(const std::string &line,
+                                     kernel_trace_t *kernel_info) {
+  if (line.empty() || line[0] != '-') return;
+
+  std::stringstream ss;
+  std::string string1, string2;
+  ss.str(line);
+  ss.ignore();
+  ss >> string1 >> string2;
+
+  if (string1 == "kernel" && string2 == "name") {
+    const size_t equal_idx = line.find('=');
+    kernel_info->kernel_name = line.substr(equal_idx + 2);
+  } else if (string1 == "kernel" && string2 == "id") {
+    sscanf(line.c_str(), "-kernel id = %d", &kernel_info->kernel_id);
+  } else if (string1 == "grid" && string2 == "dim") {
+    sscanf(line.c_str(), "-grid dim = (%d,%d,%d)", &kernel_info->grid_dim_x,
+           &kernel_info->grid_dim_y, &kernel_info->grid_dim_z);
+  } else if (string1 == "block" && string2 == "dim") {
+    sscanf(line.c_str(), "-block dim = (%d,%d,%d)", &kernel_info->tb_dim_x,
+           &kernel_info->tb_dim_y, &kernel_info->tb_dim_z);
+  } else if (string1 == "shmem" && string2 == "=") {
+    sscanf(line.c_str(), "-shmem = %d", &kernel_info->shmem);
+  } else if (string1 == "nregs") {
+    sscanf(line.c_str(), "-nregs = %d", &kernel_info->nregs);
+  } else if (string1 == "cuda" && string2 == "stream") {
+    sscanf(line.c_str(), "-cuda stream id = %llu",
+           &kernel_info->cuda_stream_id);
+  } else if (string1 == "binary" && string2 == "version") {
+    sscanf(line.c_str(), "-binary version = %d", &kernel_info->binary_verion);
+  } else if (string1 == "enable" && string2 == "lineinfo") {
+    sscanf(line.c_str(), "-enable lineinfo = %d",
+           &kernel_info->enable_lineinfo);
+  } else if (string1 == "nvbit" && string2 == "version") {
+    const size_t equal_idx = line.find('=');
+    kernel_info->nvbit_verion = line.substr(equal_idx + 1);
+  } else if (string1 == "accelsim" && string2 == "tracer") {
+    sscanf(line.c_str(), "-accelsim tracer version = %d",
+           &kernel_info->trace_verion);
+  } else if (string1 == "shmem" && string2 == "base_addr") {
+    const size_t equal_idx = line.find('=');
+    ss.str(line.substr(equal_idx + 1));
+    ss >> std::hex >> kernel_info->shmem_base_addr;
+  } else if (string1 == "local" && string2 == "mem") {
+    const size_t equal_idx = line.find('=');
+    ss.str(line.substr(equal_idx + 1));
+    ss >> std::hex >> kernel_info->local_base_addr;
+  }
+  std::cout << line << std::endl;
+}
+
 kernel_trace_t *trace_parser::parse_kernel_info(
     const std::string &kerneltraces_filepath) {
   std::cout << "Processing kernel " << kerneltraces_filepath << std::endl;
   kernel_trace_t *kernel_info = new kernel_trace_t(kerneltraces_filepath);
   kernel_info->enable_lineinfo = 0;  // default disabled
 
-  std::string line;
-  while (kernel_info->pipeReader.readLine(line)) {
-    if (line.length() == 0) {
-      continue;
-    } else if (line[0] == '#') {
-      // the trace format, ignore this and assume fixed format for now
-      break;  // the begin of the instruction stream
-    } else if (line[0] == '-') {
-      std::stringstream ss;
-      std::string string1, string2;
+  if (kernel_info->is_tracez) {
+    // .tracez path: use TracezReader to parse header and index
+    kernel_info->tracez_reader = new TracezReader();
+    std::string header_text =
+        kernel_info->tracez_reader->open(kerneltraces_filepath);
 
-      ss.str(line);
-      ss.ignore();
-      ss >> string1 >> string2;
-
-      if (string1 == "kernel" && string2 == "name") {
-        const size_t equal_idx = line.find('=');
-        kernel_info->kernel_name = line.substr(equal_idx + 2);
-      } else if (string1 == "kernel" && string2 == "id") {
-        sscanf(line.c_str(), "-kernel id = %d", &kernel_info->kernel_id);
-      } else if (string1 == "grid" && string2 == "dim") {
-        sscanf(line.c_str(), "-grid dim = (%d,%d,%d)", &kernel_info->grid_dim_x,
-               &kernel_info->grid_dim_y, &kernel_info->grid_dim_z);
-      } else if (string1 == "block" && string2 == "dim") {
-        sscanf(line.c_str(), "-block dim = (%d,%d,%d)", &kernel_info->tb_dim_x,
-               &kernel_info->tb_dim_y, &kernel_info->tb_dim_z);
-      } else if (string1 == "shmem" && string2 == "=") {
-        sscanf(line.c_str(), "-shmem = %d", &kernel_info->shmem);
-      } else if (string1 == "nregs") {
-        sscanf(line.c_str(), "-nregs = %d", &kernel_info->nregs);
-      } else if (string1 == "cuda" && string2 == "stream") {
-        sscanf(line.c_str(), "-cuda stream id = %llu",
-               &kernel_info->cuda_stream_id);
-      } else if (string1 == "binary" && string2 == "version") {
-        sscanf(line.c_str(), "-binary version = %d",
-               &kernel_info->binary_verion);
-      } else if (string1 == "enable" && string2 == "lineinfo") {
-        sscanf(line.c_str(), "-enable lineinfo = %d",
-               &kernel_info->enable_lineinfo);
-      } else if (string1 == "nvbit" && string2 == "version") {
-        const size_t equal_idx = line.find('=');
-        kernel_info->nvbit_verion = line.substr(equal_idx + 1);
-
-      } else if (string1 == "accelsim" && string2 == "tracer") {
-        sscanf(line.c_str(), "-accelsim tracer version = %d",
-               &kernel_info->trace_verion);
-
-      } else if (string1 == "shmem" && string2 == "base_addr") {
-        const size_t equal_idx = line.find('=');
-        ss.str(line.substr(equal_idx + 1));
-        ss >> std::hex >> kernel_info->shmem_base_addr;
-
-      } else if (string1 == "local" && string2 == "mem") {
-        const size_t equal_idx = line.find('=');
-        ss.str(line.substr(equal_idx + 1));
-        ss >> std::hex >> kernel_info->local_base_addr;
+    // Parse header lines from the header text
+    std::istringstream iss(header_text);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (line.empty()) continue;
+      if (line[0] == '#') break;
+      parse_kernel_header_line(line, kernel_info);
+    }
+  } else {
+    // Text path: use PipeReader
+    std::string line;
+    while (kernel_info->pipeReader.readLine(line)) {
+      if (line.length() == 0) {
+        continue;
+      } else if (line[0] == '#') {
+        break;
+      } else if (line[0] == '-') {
+        parse_kernel_header_line(line, kernel_info);
+        continue;
       }
-      std::cout << line << std::endl;
-      continue;
     }
   }
 
@@ -374,7 +549,10 @@ void trace_parser::get_next_threadblock_traces(
     threadblock_traces[i]->clear();
   }
 
-  unsigned block_id_x = 0, block_id_y = 0, block_id_z = 0;
+  dim3 block_id;
+  dim3 cluster_cta_id;
+  dim3 cluster_id;
+  unsigned cluster_rank = 0;
   bool start_of_tb_stream_found = false;
 
   unsigned warp_id = 0;
@@ -402,8 +580,22 @@ void trace_parser::get_next_threadblock_traces(
         break;  // end of TB stream
       } else if (string1 == "thread" && string2 == "block") {
         assert(start_of_tb_stream_found);
-        sscanf(line.c_str(), "thread block = %d,%d,%d", &block_id_x,
-               &block_id_y, &block_id_z);
+        sscanf(line.c_str(), "thread block = %d,%d,%d", &block_id.x,
+               &block_id.y, &block_id.z);
+        std::cout << line << std::endl;
+      } else if (string1 == "cluster" && string2 == "id") {
+        assert(start_of_tb_stream_found);
+        sscanf(line.c_str(), "cluster id = %d,%d,%d", &cluster_id.x,
+               &cluster_id.y, &cluster_id.z);
+        std::cout << line << std::endl;
+      } else if (string1 == "cluster" && string2 == "cta") {
+        assert(start_of_tb_stream_found);
+        sscanf(line.c_str(), "cluster cta = %d,%d,%d", &cluster_cta_id.x,
+               &cluster_cta_id.y, &cluster_cta_id.z);
+        std::cout << line << std::endl;
+      } else if (string1 == "cluster" && string2 == "rank") {
+        assert(start_of_tb_stream_found);
+        sscanf(line.c_str(), "cluster rank = %d", &cluster_rank);
         std::cout << line << std::endl;
       } else if (string1 == "warp") {
         // the start of new warp stream
@@ -419,7 +611,8 @@ void trace_parser::get_next_threadblock_traces(
         assert(start_of_tb_stream_found);
         threadblock_traces[warp_id]
             ->at(inst_count)
-            .parse_from_string(line, trace_version, enable_lineinfo);
+            .parse_from_string(line, trace_version, enable_lineinfo, block_id,
+                               cluster_cta_id, cluster_id, cluster_rank);
         inst_count++;
       }
     }

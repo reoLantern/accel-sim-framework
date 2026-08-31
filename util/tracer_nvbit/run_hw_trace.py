@@ -56,9 +56,9 @@ parser.add_option(
 parser.add_option(
     "--spinlock_handling",
     dest="spinlock_handling",
-    choices=["none", "fast_forward"],
-    default="none",
-    help="How to handle spinlock instructions",
+    choices=["none", "fast_forward", "mark_region"],
+    default="mark_region",
+    help="How to handle spinlock instructions: none, fast_forward, or mark_region (default: mark_region)",
 )
 parser.add_option(
     "--spinlock_fast_forward_iterations",
@@ -88,7 +88,8 @@ for bench in benchmarks:
     edir, ddir, exe, argslist = bench
     for argpair in argslist:
         args = argpair["args"]
-        run_name = os.path.join(exe, common.get_argfoldername(args))
+        kernel_name_filter = argpair.get("kernel-name-filter", "") if isinstance(argpair, dict) else ""
+        run_name = os.path.join(exe, common.get_argfoldername(argpair))
         this_run_dir = os.path.abspath(
             os.path.expandvars(
                 os.path.join(
@@ -144,10 +145,12 @@ for bench in benchmarks:
             else:
                 sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE="0-'+str(50)+'"\n')
         else:
-            if options.kernel_number > 0:
+            if kernel_name_filter:
+                sh_contents +=  (f'\nexport DYNAMIC_KERNEL_RANGE="@{kernel_name_filter}"\n')
+            elif options.kernel_number > 0:
                 sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE="0-'+str(options.kernel_number)+'"\n')
             else:
-                sh_contents +=  ('\nexport DYNAMIC_KERNEL_RANGE=""\n')
+                sh_contents +=  (f'\nexport DYNAMIC_KERNEL_RANGE="{os.environ.get("DYNAMIC_KERNEL_RANGE", "")}"\n')
 
         # first we generate the traces (.trace and kernelslist files)
         # then, we do post-processing for the traces and generate (.traceg and kernelslist.g files)
@@ -160,12 +163,15 @@ for bench in benchmarks:
             + '" ; '
         )
         
+        # Map spinlock handling mode to integer
+        spinlock_mode_map = {"none": 0, "fast_forward": 1, "mark_region": 2}
+
         tracer_contents = (
             sh_contents
             + "\nrm -f traces/*"
             + "\nexport TRACES_FOLDER="
             + this_run_dir
-            + f"; ENABLE_SPINLOCK_FAST_FORWARD={1 if options.spinlock_handling == 'fast_forward' else 0} SPINLOCK_ITER_TO_KEEP={options.spinlock_fast_forward_iterations} CUDA_INJECTION64_PATH="
+            + f"; SPINLOCK_HANDLING_MODE={spinlock_mode_map[options.spinlock_handling]} SPINLOCK_ITER_TO_KEEP={options.spinlock_fast_forward_iterations} CUDA_INJECTION64_PATH="
             + os.path.join(nvbit_tracer_path, "tracer_tool.so")
             + " "
             + exec_path
@@ -221,7 +227,7 @@ for bench in benchmarks:
             print("Running {0}".format(exe))
 
             # Call the spinlock detection script
-            if options.spinlock_handling == 'fast_forward':
+            if options.spinlock_handling in ['fast_forward', 'mark_region']:
                 if subprocess.call(["bash", "run_spinlock_detection.sh"]) != 0:
                     sys.exit(f"Error invoking spinlock detection on {this_run_dir}")
 

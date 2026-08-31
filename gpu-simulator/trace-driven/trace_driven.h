@@ -39,6 +39,7 @@
 
 #include "../ISA_Def/trace_opcode.h"
 #include "../trace-parser/trace_parser.h"
+#include "../trace-parser/warp_trace_stream.h"
 #include "abstract_hardware_model.h"
 #include "gpgpu-sim/shader.h"
 
@@ -81,6 +82,15 @@ class trace_warp_inst_t : public warp_inst_t {
 
  private:
   unsigned m_opcode;
+  /**
+   * @brief Parse the SASS opcode string for certain instruction
+   * that requires special handling.
+   *
+   * @param opcode_tokens
+   * @param trace
+   */
+  void parseSASSInstruction(std::vector<std::string> &opcode_tokens,
+                            const inst_trace_t &trace);
 };
 
 class trace_kernel_info_t : public kernel_info_t {
@@ -144,12 +154,18 @@ class trace_shd_warp_t : public shd_warp_t {
       : shd_warp_t(shader, warp_size) {
     trace_pc = 0;
     m_kernel_info = NULL;
+    m_replay_active = false;
+    m_replay_start_trace_pc = 0;
+    m_replay_iterations = 0;
+    m_stream = nullptr;
   }
 
-  std::vector<inst_trace_t> warp_traces;
+  std::vector<inst_trace_t> warp_traces;  // used for text (.traceg) path
+  WarpTraceStream *m_stream;              // used for .tracez path (owned)
   const trace_warp_inst_t *get_next_trace_inst();
   void clear();
   bool trace_done();
+  unsigned trace_total_count() const;  // total instructions for this warp
   address_type get_start_trace_pc();
   virtual address_type get_pc();
   virtual kernel_info_t *get_kernel_info() const { return m_kernel_info; }
@@ -157,9 +173,26 @@ class trace_shd_warp_t : public shd_warp_t {
     m_kernel_info = kernel_info;
   }
 
+  // Replay region support
+  bool is_in_replay() const override { return m_replay_active; }
+
+  // Roll back trace_pc for TRYWAIT retry (called from issue_warp)
+  void rollback_trace_pc() {
+    assert(trace_pc > 0);
+    trace_pc--;
+  }
+
  private:
   unsigned trace_pc;
   trace_kernel_info_t *m_kernel_info;
+
+  // Replay region state
+  bool m_replay_active;
+  unsigned m_replay_start_trace_pc;
+  unsigned m_replay_iterations;  // Count of replay loop iterations for deadlock
+
+  // Returns true if replay region exited (proceed), false if looped back
+  bool handle_replay_region_exit();
 };
 
 class trace_gpgpu_sim : public gpgpu_sim {

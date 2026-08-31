@@ -45,6 +45,12 @@ GV100:
 A100:
     base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM80_A100/gpgpusim.config"
 
+H100:
+    base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM90_H100/gpgpusim.config"
+
+H200:
+    base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM90_H200/gpgpusim.config"
+
 # Fermi
 GTX480:
     base_file: "$GPGPUSIM_ROOT/configs/tested-cfgs/SM2_GTX480/gpgpusim.config"
@@ -132,6 +138,9 @@ PAE:
 
 IPOLY:
     extra_params: "-gpgpu_memory_partition_indexing 2"
+
+IPOLY_MODULO:
+    extra_params: "-gpgpu_memory_partition_indexing 6"  
 
 VISUAL:
     extra_params: "-visualizer_enabled 1"

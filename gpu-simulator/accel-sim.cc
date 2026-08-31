@@ -141,8 +141,10 @@ void accel_sim_framework::cleanup(unsigned finished_kernel) {
         break;
     }
   }
-  assert(k);
-  m_gpgpu_sim->print_stats(finished_kernel_cuda_stream_id);
+  if (k) {
+    m_gpgpu_sim->print_stats(finished_kernel_cuda_stream_id);
+    m_gpgpu_sim->perf_counters.print_counters();
+  }
 }
 
 unsigned accel_sim_framework::simulate() {

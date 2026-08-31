@@ -10,13 +10,13 @@ env:
 jobs:
   Tracer-Weekly:
     timeout-minutes: 720
-    if: ${{ github.repository == 'accel-sim/accel-sim-framework' || github.event_name == 'workflow_dispatch' }}
-    runs-on: tgrogers-raid
+    # if: ${{ github.repository == 'accel-sim/accel-sim-framework' || github.event_name == 'workflow_dispatch' }}
+    runs-on: tgrogers-gpu01
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: dev
       - name: Setup Environment
@@ -51,8 +51,8 @@ jobs:
           source ./env-setup/12.8_env_setup.sh
           source ./gpu-app-collection/src/setup_environment
           rm -rf ./hw_run/
-          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx -- ./util/tracer_nvbit/run_hw_trace.py -B rodinia_2.0-ft,rodinia-3.1,GPU_Microbenchmark -D 7
-          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx -- ./util/hw_stats/run_hw.py -B rodinia_2.0-ft,rodinia-3.1,GPU_Microbenchmark -D 7
+          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx --time=02:00:00 -- ./util/tracer_nvbit/run_hw_trace.py -B rodinia_2.0-ft,rodinia-3.1,GPU_Microbenchmark -D 7
+          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx --time=02:00:00 -- ./util/hw_stats/run_hw.py -B rodinia_2.0-ft,rodinia-3.1,GPU_Microbenchmark -D 7
           rm -rf /scratch/tgrogers-disk01/a/common/for-sharing/$USER/nightly-traces
           mkdir -p /scratch/tgrogers-disk01/a/common/for-sharing/$USER/nightly-traces
           mv ./hw_run /scratch/tgrogers-disk01/a/common/for-sharing/$USER/nightly-traces/hw_run
@@ -63,21 +63,21 @@ jobs:
           source ./gpu-app-collection/src/setup_environment
           rm -rf ./hw_run/
           mkdir -p ./hw_run/
-          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx -- ./util/tracer_nvbit/run_hw_trace.py -B Spinlock -D 7 --spinlock_handling fast_forward
+          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx --time=02:00:00 -- ./util/tracer_nvbit/run_hw_trace.py -B Spinlock -D 7 --spinlock_handling fast_forward
           mv ./hw_run /scratch/tgrogers-disk01/a/common/for-sharing/$USER/nightly-traces/hw_run_fast_forward
           mkdir -p ./hw_run/
-          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx -- ./util/tracer_nvbit/run_hw_trace.py -B Spinlock -D 7 --spinlock_handling none
+          srun --job-name=gpu-lock --dependency=singleton --partition=tgrogers-dgx --time=02:00:00 -- ./util/tracer_nvbit/run_hw_trace.py -B Spinlock -D 7 --spinlock_handling none
           mv ./hw_run /scratch/tgrogers-disk01/a/common/for-sharing/$USER/nightly-traces/hw_run_none
   SASS-Weekly:
-    timeout-minutes: 720
+    timeout-minutes: 900
     needs: [Tracer-Weekly]
-    if: ${{ github.repository == 'accel-sim/accel-sim-framework' || github.event_name == 'workflow_dispatch' }}
+    # if: ${{ github.repository == 'accel-sim/accel-sim-framework' || github.event_name == 'workflow_dispatch' }}
     runs-on: tgrogers-raid 
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: dev
       - name: Setup Environment
@@ -122,8 +122,10 @@ jobs:
           fi
 
           source ./gpu-simulator/setup_environment.sh
-          make clean -C gpu-simulator
-          make -j -C gpu-simulator
+          rm -rf ./gpu-simulator/build/release ./gpu-simulator/bin/release
+          cmake -S ./gpu-simulator/ -B ./gpu-simulator/build/release
+          cmake --build ./gpu-simulator/build/release -j
+          cmake --install ./gpu-simulator/build/release
       - name: run SASS
         run: |
           source ./env-setup/12.8_env_setup.sh
@@ -148,7 +150,7 @@ jobs:
     runs-on: tgrogers-raid
     needs: [Tracer-Weekly, SASS-Weekly]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Notify Failure
         run: |
           # Setup envs

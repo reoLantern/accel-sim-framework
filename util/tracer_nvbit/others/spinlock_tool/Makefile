@@ -49,14 +49,16 @@ MAXRREGCOUNT_FLAG=
 endif
 
 NVBIT_PATH=../../nvbit_release/core
-INCLUDES=-I$(NVBIT_PATH)
+ACCEL_SIM_TRACER_PATH=../..
+INCLUDES=-I$(NVBIT_PATH) -I$(ACCEL_SIM_TRACER_PATH)/include
 
 LIBS=-L$(NVBIT_PATH) -lnvbit
 NVCC_PATH=-L $(subst bin/nvcc,lib64,$(shell which nvcc | tr -s /))
 
-SOURCES=$(wildcard *.cu)
+CU_SOURCES=$(wildcard *.cu)
+CPP_SOURCES=$(wildcard *.cpp)
 
-OBJECTS=$(SOURCES:.cu=.o)
+OBJECTS=$(CU_SOURCES:.cu=.o) $(CPP_SOURCES:.cpp=.o)
 ARCH?=all
 
 mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
@@ -71,6 +73,9 @@ $(NVBIT_TOOL): $(OBJECTS) $(NVBIT_PATH)/libnvbit.a
 
 %.o: %.cu
 	$(NVCC) -dc -c -std=c++17 $(INCLUDES) -Xptxas -cloning=no -Xcompiler -Wall -arch=$(ARCH) -O3 -Xcompiler -fPIC $< -o $@
+
+%.o: %.cpp
+	$(CXX) -std=c++17 $(INCLUDES) -Wall -O3 -fPIC -c $< -o $@
 
 inject_funcs.o: inject_funcs.cu
 	$(NVCC) $(INCLUDES) $(MAXRREGCOUNT_FLAG) -Xptxas -astoolspatch --keep-device-functions -arch=$(ARCH) -Xcompiler -Wall -Xcompiler -fPIC -c $< -o $@
